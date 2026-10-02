@@ -128,6 +128,11 @@ pub struct Space {
     /// (sha256(deviceId ‖ NUL ‖ git_dir)) — diff grouping key for root sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout_id: Option<String>,
+    /// Owner-stamped when git: the GitHub repository (`owner/name`) of the
+    /// folder's `origin` remote. When Cloud reaches it, a session in this
+    /// project can run on its own Cloud machine (the checkout picker's Cloud).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_repo: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

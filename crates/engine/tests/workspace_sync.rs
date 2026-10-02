@@ -157,6 +157,7 @@ fn run_request(prompt: &str) -> RunRequest {
         attachments: Vec::new(),
         worktree: None,
         resume: None,
+        env: Default::default(),
     }
 }
 
@@ -693,6 +694,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
                 git_detected: true,
                 git_checked_at: Some(now),
                 checkout_id: Some("co-1".into()),
+                github_repo: None,
                 created_at: now,
             })
             .unwrap();

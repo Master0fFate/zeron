@@ -4318,8 +4318,11 @@ impl Shell {
             .unwrap_or("Unknown device")
             .to_string();
         let mut folder = project.clone();
-        // Unknown device → no fragment, same as the archived list.
-        if state.device_name(&chat.device_id).is_some() {
+        // Unknown device → no fragment, same as the archived list; a Cloud
+        // chat's own machine isn't a device worth naming either.
+        if state.device_name(&chat.device_id).is_some()
+            && !zeron_proto::is_cloud_device(&chat.device_id, "")
+        {
             folder = format!("{folder} @ {device}");
         }
         // The branch shows whenever the engine has stamped one —
@@ -5689,6 +5692,7 @@ impl Shell {
             git_detected,
             git_checked_at: None,
             checkout_id: None,
+            github_repo: None,
             created_at: Utc::now(),
         };
         self.state.update(cx, |s, cx| {

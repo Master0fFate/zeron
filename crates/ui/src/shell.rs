@@ -38,6 +38,7 @@ use crate::rail;
 use crate::settings::accounts::AccountsPage;
 use crate::settings::appearance::{AppearancePage, AppearanceSettingsEvent};
 use crate::settings::archived::ArchivedPage;
+use crate::settings::cloud::CloudPage;
 use crate::settings::devices::DevicesPage;
 use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::harnesses::HarnessesPage;
@@ -523,6 +524,8 @@ pub fn apply_keymap(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsSection {
     Devices,
+    /// The user's Cloud device: lifecycle, its providers, GitHub.
+    Cloud,
     /// Which harnesses the composer offers (enable/disable toggles) —
     /// labeled "Providers".
     Harnesses,
@@ -542,7 +545,7 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 10] = [
+    pub const ALL: [SettingsSection; 11] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
@@ -550,6 +553,7 @@ impl SettingsSection {
         SettingsSection::Shortcuts,
         SettingsSection::Harnesses,
         SettingsSection::Devices,
+        SettingsSection::Cloud,
         SettingsSection::Files,
         SettingsSection::Appshots,
         SettingsSection::Archived,
@@ -585,6 +589,7 @@ impl SettingsSection {
     fn slug(self) -> &'static str {
         match self {
             SettingsSection::Devices => "devices",
+            SettingsSection::Cloud => "cloud",
             SettingsSection::Harnesses => "providers",
             SettingsSection::Agents => "agents",
             SettingsSection::Appearance => "appearance",
@@ -602,6 +607,7 @@ impl SettingsSection {
     fn from_slug(slug: &str) -> Option<Self> {
         Some(match slug {
             "devices" => SettingsSection::Devices,
+            "cloud" => SettingsSection::Cloud,
             "providers" | "harnesses" => SettingsSection::Harnesses,
             "agents" => SettingsSection::Agents,
             "appearance" => SettingsSection::Appearance,
@@ -627,6 +633,7 @@ impl SettingsSection {
     pub fn label(self) -> &'static str {
         match self {
             SettingsSection::Devices => "Devices",
+            SettingsSection::Cloud => "Cloud",
             SettingsSection::Harnesses => "Providers",
             SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
@@ -1860,6 +1867,9 @@ pub struct Shell {
     /// Route history behind the titlebar back/forward buttons (§ nav history).
     nav: NavHistory,
     devices_page: Option<Entity<DevicesPage>>,
+    /// Rebuilt per visit and dropped on leaving, which stops its GitHub
+    /// polling and status re-checks.
+    cloud_page: Option<Entity<CloudPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
     appearance_page: Option<Entity<AppearancePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
@@ -2309,6 +2319,7 @@ impl Shell {
             settings_restore_pending: false,
             nav,
             devices_page: None,
+            cloud_page: None,
             archived_page: None,
             appearance_page: None,
             files_settings_page: None,
@@ -4050,7 +4061,8 @@ impl Shell {
     ) {
         let was_active = self.resolved_right_active(cx) == surface;
         let restore_focus = was_active && self.navigation_focus.in_right(window, cx);
-        self.navigation_focus.remember(&self.shortcut_focus, window, cx);
+        self.navigation_focus
+            .remember(&self.shortcut_focus, window, cx);
         let key = self.panel_key(cx);
         let files = match surface {
             RightSurface::File(id) => self.file_surfaces.get(&id).cloned(),
@@ -4637,6 +4649,10 @@ impl Shell {
         if section == SettingsSection::Harnesses {
             self.harnesses_page = None;
         }
+        // Cloud status is read once per visit.
+        if section == SettingsSection::Cloud {
+            self.cloud_page = None;
+        }
         if !matches!(self.route, Route::Settings(_)) {
             self.settings_focus_pending = true;
         }
@@ -4691,6 +4707,10 @@ impl Shell {
                 .is_some_and(|page| page.update(cx, |page, cx| page.dismiss_on_escape(cx))),
             SettingsSection::Harnesses => self
                 .harnesses_page
+                .as_ref()
+                .is_some_and(|page| page.update(cx, |page, cx| page.dismiss_on_escape(cx))),
+            SettingsSection::Cloud => self
+                .cloud_page
                 .as_ref()
                 .is_some_and(|page| page.update(cx, |page, cx| page.dismiss_on_escape(cx))),
             SettingsSection::Appearance => self
@@ -4768,6 +4788,16 @@ impl Shell {
                     self.devices_page = Some(cx.new(|cx| DevicesPage::new(state, cx)));
                 }
                 match &self.devices_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
+            SettingsSection::Cloud => {
+                if self.cloud_page.is_none() {
+                    let state = self.state.clone();
+                    self.cloud_page = Some(cx.new(|cx| CloudPage::new(state, cx)));
+                }
+                match &self.cloud_page {
                     Some(page) => page.clone().into_any_element(),
                     None => Empty.into_any_element(),
                 }
@@ -6840,6 +6870,7 @@ impl Shell {
     ) -> AnyElement {
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::Devices => icons::MONITOR,
+            SettingsSection::Cloud => icons::CLOUD,
             SettingsSection::Harnesses => icons::WIDGET,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
             SettingsSection::Appearance => icons::TUNING,
@@ -6997,15 +7028,26 @@ impl Shell {
         };
         let compact = search_query.is_none() && self.settings.sidebar_compact;
         let show_label = search_query.is_some() || self.settings.sidebar_show_project_label;
-        let remote = self
+        let host = self
             .state
             .read(cx)
             .chats
             .iter()
             .find(|chat| chat.id == id)
-            .is_some_and(|chat| {
-                self.state.read(cx).local_device_id.as_deref() != Some(chat.device_id.as_str())
-            });
+            .map(|chat| chat.device_id.clone());
+        let remote = host
+            .as_deref()
+            .is_some_and(|host| self.state.read(cx).local_device_id.as_deref() != Some(host));
+        // A chat on a Cloud session machine wears the cloud, not the generic
+        // remote-device globe.
+        let remote_glyph = if host
+            .as_deref()
+            .is_some_and(|host| zeron_proto::is_cloud_device(host, ""))
+        {
+            icons::CLOUD
+        } else {
+            icons::REMOTE_SERVER
+        };
         let project_icon = (search_query.is_none() && self.settings.sidebar_show_project_icon)
             .then(|| self.render_project_icon(&id, SIDEBAR_ACTIVE_HARNESS_ICON_SIZE, selected, cx));
         let corner_hovered = !preview && self.chat_status_hover.as_deref() == Some(row_id.as_str());
@@ -7160,7 +7202,7 @@ impl Shell {
                 .into_any_element()
         } else if compact {
             if remote {
-                icon(icons::REMOTE_SERVER)
+                icon(remote_glyph)
                     .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
                     .text_color(theme.text_muted.opacity(0.5))
                     .into_any_element()
@@ -7465,7 +7507,7 @@ impl Shell {
                     ))
                     .when(!compact && !show_label && remote, |el| {
                         el.child(
-                            icon(icons::REMOTE_SERVER)
+                            icon(remote_glyph)
                                 .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
                                 .flex_none()
                                 .text_color(subline),
@@ -7695,13 +7737,19 @@ impl Shell {
         use zeron_proto::ConnectivityState as S;
         let conn = self.state.read(cx).connectivity.clone();
         let selected = self.state.read(cx).selected_chat.as_deref();
-        let chat = conn.chats.iter()
+        let chat = conn
+            .chats
+            .iter()
             .find(|c| Some(c.chat_id.as_str()) == selected);
         let chat_state = chat.map(|c| c.sync_state);
         let (label, glyph): (SharedString, AnyElement) = match conn.state {
             _ if chat_state == Some(zeron_proto::ChatSyncState::StorageError) => (
                 "Changes could not be saved".into(),
-                div().size(px(5.0)).rounded_full().bg(theme.warning).into_any_element(),
+                div()
+                    .size(px(5.0))
+                    .rounded_full()
+                    .bg(theme.warning)
+                    .into_any_element(),
             ),
             S::Disabled => return None,
             S::Connected => {
@@ -7709,9 +7757,13 @@ impl Shell {
                 (
                     caption.into(),
                     loaders::mini_mono_spinner(
-                        "chat-sync-spinner", 2.0, theme.text_muted,
-                        self.sidebar_pane.entity_id(), cx,
-                    ).into_any_element(),
+                        "chat-sync-spinner",
+                        2.0,
+                        theme.text_muted,
+                        self.sidebar_pane.entity_id(),
+                        cx,
+                    )
+                    .into_any_element(),
                 )
             }
             S::Offline => (
@@ -7963,7 +8015,6 @@ impl Shell {
 
         // t3code's archived accordion, below the active list.
         let archived_section = self.render_archived_section(theme, cx);
-
 
         // The space filter lives ABOVE the scroll region (fixed) so its
         // dropdown can float without being clipped by the list's overflow.
@@ -11122,22 +11173,20 @@ impl Shell {
                 // up the carve-out. The bubble dispatch reaches the chip
                 // before the strip, and the handler consumes the drag, so
                 // the two never double-apply.
-                .on_drop::<RightTabDrag>(cx.listener(
-                    move |this, payload: &RightTabDrag, _, cx| {
-                        if payload.panel_key != this.panel_key(cx) {
-                            this.right_tab_drag = None;
-                            cx.notify();
-                            return;
-                        }
-                        let to = this
-                            .right_tab_drag
-                            .as_ref()
-                            .map(|d| d.over)
-                            .unwrap_or(payload.from);
+                .on_drop::<RightTabDrag>(cx.listener(move |this, payload: &RightTabDrag, _, cx| {
+                    if payload.panel_key != this.panel_key(cx) {
                         this.right_tab_drag = None;
-                        this.reorder_right_tabs(payload.from, to, cx);
-                    },
-                ))
+                        cx.notify();
+                        return;
+                    }
+                    let to = this
+                        .right_tab_drag
+                        .as_ref()
+                        .map(|d| d.over)
+                        .unwrap_or(payload.from);
+                    this.right_tab_drag = None;
+                    this.reorder_right_tabs(payload.from, to, cx);
+                }))
                 .child(
                     // Leading slot: the surface's icon.
                     div()
@@ -12167,6 +12216,11 @@ impl Render for Shell {
             files.update(cx, |files, cx| files.suspend_tree_interactions(cx));
         }
         settings::wallpaper::preload(cx);
+        // Settings → Cloud lives only while shown: dropping it cancels a
+        // GitHub sign-in poll and its slow status re-checks.
+        if self.cloud_page.is_some() && self.route != Route::Settings(SettingsSection::Cloud) {
+            self.cloud_page = None;
+        }
         self.navigation_focus
             .remember(&self.shortcut_focus, window, cx);
         if let Some(command) = self.pending_workspace_command.take() {
@@ -13003,17 +13057,26 @@ mod tests {
 
         chat.sync_state = S::Waiting;
         chat.connected = false;
-        assert_eq!(chat_sync_pill_caption(&chat), Some("Sync queued — changes are saved"));
+        assert_eq!(
+            chat_sync_pill_caption(&chat),
+            Some("Sync queued — changes are saved")
+        );
         chat.sync_state = S::Connecting;
         assert_eq!(chat_sync_pill_caption(&chat), Some("Syncing…"));
         chat.sync_state = S::Offline;
-        assert_eq!(chat_sync_pill_caption(&chat), Some("Offline — changes are saved"));
+        assert_eq!(
+            chat_sync_pill_caption(&chat),
+            Some("Offline — changes are saved")
+        );
 
         // Real pending pushes remain visible even with a live room.
         chat.connected = true;
         chat.pending_pushes = 1;
         chat.sync_state = S::Waiting;
-        assert_eq!(chat_sync_pill_caption(&chat), Some("Sync queued — changes are saved"));
+        assert_eq!(
+            chat_sync_pill_caption(&chat),
+            Some("Sync queued — changes are saved")
+        );
         chat.sync_state = S::Connecting;
         assert_eq!(chat_sync_pill_caption(&chat), Some("Syncing…"));
     }
@@ -14511,7 +14574,8 @@ mod exit_regressions {
                     settings::update(settings::SavePolicy::Immediate, cx, |settings| {
                         settings.wallpaper_folder = Some(dir.path().join("wallpapers"));
                         settings.wallpaper_source = Some(dir.path().join("wallpapers/current.png"));
-                        settings.wallpaper_history = vec![dir.path().join("wallpapers/current.png")];
+                        settings.wallpaper_history =
+                            vec![dir.path().join("wallpapers/current.png")];
                         settings.window_geometry = geometry;
                         settings.open_web_links_in_zeron = open_links_in_zeron;
                         settings.terminal_font_family = terminal_family.clone();
@@ -14533,8 +14597,14 @@ mod exit_regressions {
                         shell.settings.terminal_height = 300.0 + step as f32;
                         shell.schedule_save(cx);
                         let current = settings::current(cx);
-                        assert_eq!(current.wallpaper_history, vec![dir.path().join("wallpapers/current.png")]);
-                        assert_eq!(current.wallpaper_folder, Some(dir.path().join("wallpapers")));
+                        assert_eq!(
+                            current.wallpaper_history,
+                            vec![dir.path().join("wallpapers/current.png")]
+                        );
+                        assert_eq!(
+                            current.wallpaper_folder,
+                            Some(dir.path().join("wallpapers"))
+                        );
                         assert_eq!(
                             current.wallpaper_source,
                             Some(dir.path().join("wallpapers/current.png"))
@@ -14562,7 +14632,10 @@ mod exit_regressions {
                     settings::flush(cx);
                     let loaded = settings::UiSettings::load(dir.path());
                     assert_eq!(loaded.window_geometry, geometry);
-                    assert_eq!(loaded.wallpaper_history, vec![dir.path().join("wallpapers/current.png")]);
+                    assert_eq!(
+                        loaded.wallpaper_history,
+                        vec![dir.path().join("wallpapers/current.png")]
+                    );
                     assert_eq!(loaded.wallpaper_folder, Some(dir.path().join("wallpapers")));
                     assert_eq!(
                         loaded.wallpaper_source,
@@ -15047,6 +15120,7 @@ mod exit_regressions {
                         git_detected: false,
                         git_checked_at: None,
                         checkout_id: None,
+                        github_repo: None,
                         created_at: Utc::now(),
                     }]);
                     // Boot opened an existing project session after loading defaults.
@@ -15115,6 +15189,7 @@ mod exit_regressions {
             git_detected: false,
             git_checked_at: None,
             checkout_id: None,
+            github_repo: None,
             created_at: Utc::now(),
         };
         window
@@ -15145,7 +15220,10 @@ mod exit_regressions {
                 });
                 shell.settings.space_filter = None;
                 shell.open_chat("elsewhere".into(), cx);
-                assert_eq!(shell.state.read(cx).selected_space.as_deref(), Some("other"));
+                assert_eq!(
+                    shell.state.read(cx).selected_space.as_deref(),
+                    Some("other")
+                );
                 shell.open_new_session(cx);
                 let state = shell.state.read(cx);
                 assert!(state.selected_chat.is_none());
@@ -15403,6 +15481,7 @@ mod exit_regressions {
                         git_detected: false,
                         git_checked_at: None,
                         checkout_id: None,
+                        github_repo: None,
                         created_at: Utc::now(),
                     }]);
                 });
@@ -16510,6 +16589,7 @@ mod settings_modal_regressions {
         );
         for (route, section) in [
             ("settings/devices", SettingsSection::Devices),
+            ("settings/cloud", SettingsSection::Cloud),
             ("settings/providers", SettingsSection::Harnesses),
             ("settings/agents", SettingsSection::Harnesses),
             ("settings/harnesses", SettingsSection::Harnesses),
@@ -16666,6 +16746,45 @@ mod settings_modal_regressions {
                 );
             })
             .unwrap();
+    }
+
+    /// Settings → Cloud is rebuilt per visit and dropped on leaving, which is
+    /// what stops its GitHub polling and status re-checks.
+    #[gpui::test]
+    fn cloud_settings_page_lives_only_while_shown(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        init_settings_test(settings::UiSettings::default(), dir.path(), cx);
+        let (shell, cx) = cx.add_window_view(|_, cx| test_shell(dir.path(), cx));
+        shell.update(cx, |shell, cx| {
+            shell.debug_gate = Some(GatePhase::Ready);
+            shell.open_settings(SettingsSection::Cloud, cx)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        let first = shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.route, Route::Settings(SettingsSection::Cloud));
+            shell.cloud_page.clone().expect("Cloud page mounts")
+        });
+        shell.update(cx, |shell, cx| {
+            shell.open_settings(SettingsSection::Devices, cx)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        shell.read_with(cx, |shell, _| assert!(shell.cloud_page.is_none()));
+        shell.update(cx, |shell, cx| {
+            shell.open_settings(SettingsSection::Cloud, cx)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        shell.read_with(cx, |shell, _| {
+            let second = shell.cloud_page.clone().expect("Cloud page remounts");
+            assert_ne!(first.entity_id(), second.entity_id());
+        });
+        drop(first);
+        shell.update(cx, |shell, cx| shell.close_settings(cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        shell.read_with(cx, |shell, _| assert!(shell.cloud_page.is_none()));
     }
 
     #[gpui::test]

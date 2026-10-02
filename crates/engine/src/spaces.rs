@@ -222,6 +222,13 @@ async fn check_space(inner: &Arc<SpacesSyncInner>, space_id: &str, path: &Path) 
     } else {
         None
     };
+    // The project's GitHub repository, so every device can offer running a
+    // session on Cloud without asking this one.
+    let github_repo = if detected {
+        inner.repos.github_repo(path).await
+    } else {
+        None
+    };
     let current = match inner.workspace.read_spaces() {
         Ok(spaces) => spaces.into_iter().find(|s| s.id == space_id),
         Err(err) => {
@@ -232,13 +239,18 @@ async fn check_space(inner: &Arc<SpacesSyncInner>, space_id: &str, path: &Path) 
     let Some(current) = current else {
         return; // deleted while checking
     };
-    if current.git_detected == detected && current.checkout_id == checkout_id {
+    if current.git_detected == detected
+        && current.checkout_id == checkout_id
+        && current.github_repo == github_repo
+    {
         return; // unchanged — no oplog growth
     }
-    match inner
-        .workspace
-        .set_space_git(space_id, detected, checkout_id.as_deref())
-    {
+    match inner.workspace.set_space_git(
+        space_id,
+        detected,
+        checkout_id.as_deref(),
+        github_repo.as_deref(),
+    ) {
         Ok(_) => {
             tracing::info!(space = %space_id, git = detected, "space git presence updated");
         }

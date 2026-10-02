@@ -246,6 +246,7 @@ pub(crate) fn spaces(now: i64) -> Vec<Space> {
             git_detected: git,
             git_checked_at: git.then(|| ms(now)),
             checkout_id: git.then(|| format!("co-{id}")),
+            github_repo: None,
             created_at: ms(now - ago),
         };
     vec![
