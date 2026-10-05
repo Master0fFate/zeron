@@ -13,8 +13,8 @@ use std::{
 use webview2_com::{
     AcceleratorKeyPressedEventHandler, CreateCoreWebView2CompositionControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, CursorChangedEventHandler,
-    DocumentTitleChangedEventHandler, DownloadStartingEventHandler, FaviconChangedEventHandler,
-    HistoryChangedEventHandler, Microsoft::Web::WebView2::Win32::*,
+    DocumentTitleChangedEventHandler, DownloadStartingEventHandler, ExecuteScriptCompletedHandler,
+    FaviconChangedEventHandler, HistoryChangedEventHandler, Microsoft::Web::WebView2::Win32::*,
     NavigationCompletedEventHandler, NavigationStartingEventHandler,
     NewWindowRequestedEventHandler, ProcessFailedEventHandler, SourceChangedEventHandler,
     take_pwstr,
@@ -37,8 +37,13 @@ pub(super) enum NativeEvent {
     Finished,
     NewTab(String),
     Key(Keystroke),
-    Favicon { page: String, url: String },
+    Favicon {
+        page: String,
+        url: String,
+    },
     Cursor(CursorStyle),
+    /// A script's string result (`None` for any other value or a failure).
+    Evaluated(Option<String>),
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +402,28 @@ impl NativePage {
         }
     }
 
+    /// Run `script` in the main frame; a string result arrives as
+    /// [`NativeEvent::Evaluated`].
+    pub fn evaluate(&self, script: &str) {
+        let Some(page) = &*self.0.page.borrow() else {
+            let _ = self.0.tx.try_send(NativeEvent::Evaluated(None));
+            return;
+        };
+        let tx = self.0.tx.clone();
+        let handler = ExecuteScriptCompletedHandler::create(Box::new(move |result, json| {
+            // WebView2 returns the value JSON-encoded.
+            let value = result
+                .ok()
+                .and_then(|()| serde_json::from_str::<serde_json::Value>(&json).ok())
+                .and_then(|value| value.as_str().map(str::to_owned));
+            let _ = tx.try_send(NativeEvent::Evaluated(value));
+            Ok(())
+        }));
+        unsafe {
+            let _ = page.webview.ExecuteScript(&HSTRING::from(script), &handler);
+        }
+    }
+
     /// Return the keyboard to GPUI chrome (the address bar).
     pub fn focus_chrome(&self) {
         use windows::Win32::UI::{
@@ -408,6 +435,16 @@ impl NativePage {
             if !focus.is_invalid() && focus != self.0.hwnd && IsChild(self.0.hwnd, focus).as_bool()
             {
                 let _ = SetFocus(Some(self.0.hwnd));
+            }
+        }
+    }
+
+    pub fn focus_page(&self) {
+        if let Some(page) = &*self.0.page.borrow() {
+            unsafe {
+                let _ = page
+                    .controller
+                    .MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
             }
         }
     }

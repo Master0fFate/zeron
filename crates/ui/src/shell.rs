@@ -2168,6 +2168,16 @@ impl Shell {
                     this.pending_workspace_command = Some(*command);
                     cx.notify();
                 }
+                ComposerEvent::AnnotationsChanged(numbers) => {
+                    let key = this.panel_key(cx);
+                    for surface in this.right_tabs.get(&key).into_iter().flatten() {
+                        if let RightSurface::Browser(id) = surface
+                            && let Some(browser) = this.browsers.get(id)
+                        {
+                            browser.read(cx).keep_markers(numbers);
+                        }
+                    }
+                }
                 ComposerEvent::NewThreadTransitionStarted => {
                     // Route observation drives the dock once selection commits.
                     cx.notify();
@@ -3553,6 +3563,26 @@ impl Shell {
                 }
                 crate::browser::BrowserEvent::Close => {
                     this.close_right_surface(RightSurface::Browser(id), window, cx)
+                }
+                crate::browser::BrowserEvent::Annotation {
+                    annotation,
+                    marker,
+                    last,
+                } => {
+                    // Only the session that owns this tab receives its picks.
+                    if this.panel_key(cx) == owner {
+                        let annotation = annotation.clone();
+                        let last = *last;
+                        if last && let Some(browser) = this.browsers.get(&id) {
+                            browser.read(cx).release_keyboard();
+                        }
+                        let number = this.composer.update(cx, |composer, cx| {
+                            composer.add_browser_annotation(annotation, last, window, cx)
+                        });
+                        if let (Some(number), Some(browser)) = (number, this.browsers.get(&id)) {
+                            browser.read(cx).label_marker(*marker, number);
+                        }
+                    }
                 }
             }
         });
@@ -16725,6 +16755,10 @@ impl Shell {
     }
     pub fn fixture_transcript(&self) -> Entity<crate::transcript::Transcript> {
         self.transcript.clone()
+    }
+    pub fn fixture_open_browser(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_surfaces_open(true, cx);
+        self.add_browser_surface(Some(url), window, cx);
     }
 }
 
