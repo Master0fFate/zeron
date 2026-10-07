@@ -4264,6 +4264,9 @@ impl ComposerInput {
         let marked = self.marked_range.as_ref().map(|r| {
             self.projection.raw_to_display(r.start)..self.projection.raw_to_display(r.end)
         });
+        let preview = self.dictation.preview().map(|r| {
+            self.projection.raw_to_display(r.start)..self.projection.raw_to_display(r.end)
+        });
         let mut boundaries = vec![0, display.len()];
         for (range, _) in &syntax {
             boundaries.extend([range.start, range.end]);
@@ -4278,6 +4281,9 @@ impl ComposerInput {
             }
         }
         if let Some(range) = &marked {
+            boundaries.extend([range.start, range.end]);
+        }
+        if let Some(range) = &preview {
             boundaries.extend([range.start, range.end]);
         }
         boundaries.sort_unstable();
@@ -4350,6 +4356,10 @@ impl ComposerInput {
                     {
                         run.color = Theme::of(cx).syntax.color(*kind);
                     }
+                }
+                if !chip && preview.as_ref().is_some_and(|range| range.contains(&r[0])) {
+                    run.font.style = gpui::FontStyle::Italic;
+                    run.color = crate::motion::mix(run.color, theme.text_muted, 0.45);
                 }
                 run
             })
