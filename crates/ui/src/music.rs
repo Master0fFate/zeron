@@ -9,6 +9,7 @@ use gpui::{
     AnyElement, Bounds, Context, DragMoveEvent, Entity, Focusable as _, MouseButton, Pixels,
     RenderImage, ScrollHandle, SharedString, Task, Window, div, prelude::*, px,
 };
+use zeron_music::media::{self, Command, Status};
 use zeron_music::source::{self, Origin, Track};
 use zeron_music::{Event, Player};
 
@@ -73,7 +74,7 @@ pub struct MusicPlayer {
     scrub: Option<f32>,
     popup: Popup<()>,
     queue_open: bool,
-    art: Option<(u64, Arc<RenderImage>)>,
+    art: Option<(u64, Arc<RenderImage>, PathBuf)>,
     input: Entity<ComposerInput>,
     queue_scroll: ScrollHandle,
     seek_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -85,6 +86,8 @@ pub struct MusicPlayer {
     fetch_task: Option<Task<()>>,
     prefetch_task: Option<Task<()>>,
     art_task: Option<Task<()>>,
+    media: Option<media::Controls>,
+    media_task: Option<Task<()>>,
 }
 
 impl MusicPlayer {
@@ -112,6 +115,8 @@ impl MusicPlayer {
                 this.clear(cx);
                 this.player = None;
                 this.events = None;
+                this.media = None;
+                this.media_task = None;
                 this.popup = Popup::default();
             }
         })
@@ -155,6 +160,8 @@ impl MusicPlayer {
             fetch_task: None,
             prefetch_task: None,
             art_task: None,
+            media: None,
+            media_task: None,
         }
     }
 
@@ -302,6 +309,7 @@ impl MusicPlayer {
         if let Some(player) = &self.player {
             player.stop();
         }
+        self.media_status();
         cx.notify();
     }
 
@@ -315,6 +323,7 @@ impl MusicPlayer {
         if thumbnail.is_none() && file.is_none() {
             return;
         }
+        let path = self.cache_dir.join(format!("art-{id}"));
         let task = gpui_tokio::Tokio::spawn_result(cx, async move {
             let mut bytes = match thumbnail {
                 Some(url) => source::fetch_art(&url).await.ok(),
@@ -323,19 +332,23 @@ impl MusicPlayer {
             if bytes.is_none() {
                 bytes = file.as_deref().and_then(source::embedded_art);
             }
-            bytes
-                .as_deref()
-                .and_then(cover)
-                .ok_or_else(|| anyhow::anyhow!("No cover"))
+            let bytes = bytes.ok_or_else(|| anyhow::anyhow!("No cover"))?;
+            let image = cover(&bytes).ok_or_else(|| anyhow::anyhow!("No cover"))?;
+            if let Some(dir) = path.parent() {
+                tokio::fs::create_dir_all(dir).await?;
+            }
+            tokio::fs::write(&path, &bytes).await?;
+            Ok((image, path))
         });
         self.art_task = Some(cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
                 this.art_task = None;
-                if let Ok(image) = result
+                if let Ok((image, path)) = result
                     && this.current == Some(id)
                 {
-                    this.art = Some((id, image));
+                    this.art = Some((id, image, path));
+                    this.media_track();
                     cx.notify();
                 }
             })
@@ -345,7 +358,11 @@ impl MusicPlayer {
 
     fn drop_art(&mut self, cx: &mut Context<Self>) {
         self.art_task = None;
-        if let Some((_, image)) = self.art.take() {
+        if let Some((_, image, path)) = self.art.take() {
+            cx.background_spawn(async move {
+                let _ = std::fs::remove_file(path);
+            })
+            .detach();
             cx.defer(move |cx| gpui::ImageSource::Render(image).evict(None, cx));
         }
     }
@@ -373,7 +390,7 @@ impl MusicPlayer {
         let Some(ix) = self.index_of(id) else {
             return;
         };
-        if self.art.as_ref().is_none_or(|(art_id, _)| *art_id != id) {
+        if self.art.as_ref().is_none_or(|(art_id, ..)| *art_id != id) {
             self.drop_art(cx);
             let entry = &self.queue[ix];
             let (thumbnail, file) = (entry.track.thumbnail.clone(), entry.file.clone());
@@ -402,6 +419,8 @@ impl MusicPlayer {
                     .ok();
             }));
         }
+        self.media_track();
+        self.media_status();
         cx.notify();
     }
 
@@ -459,6 +478,8 @@ impl MusicPlayer {
                 self.failures = 0;
                 self.prefetch_next(cx);
                 self.sync_tick(cx);
+                self.media_track();
+                self.media_status();
             }
             Event::Ended => {
                 self.playing = false;
@@ -480,6 +501,7 @@ impl MusicPlayer {
             self.advance(true, cx);
         } else {
             self.playing = false;
+            self.media_status();
         }
     }
 
@@ -500,9 +522,7 @@ impl MusicPlayer {
             Some(id) => self.play_id(id, cx),
             None => {
                 self.playing = false;
-                if let Some(player) = &self.player {
-                    player.seek(0.0);
-                }
+                self.seek_to(0.0);
             }
         }
     }
@@ -514,11 +534,7 @@ impl MusicPlayer {
                 let id = self.queue[ix - 1].id;
                 self.play_id(id, cx);
             }
-            Some(_) => {
-                if let Some(player) = &self.player {
-                    player.seek(0.0);
-                }
-            }
+            Some(_) => self.seek_to(0.0),
             None => {}
         }
     }
@@ -543,6 +559,7 @@ impl MusicPlayer {
                 self.sync_tick(cx);
             }
         }
+        self.media_status();
         cx.notify();
     }
 
@@ -594,10 +611,88 @@ impl MusicPlayer {
         let (Some(fraction), Some(duration)) = (self.scrub.take(), self.duration()) else {
             return;
         };
+        self.seek_to(fraction as f64 * duration);
+        cx.notify();
+    }
+
+    fn seek_to(&mut self, seconds: f64) {
         if let Some(player) = &self.player {
-            player.seek(fraction as f64 * duration);
+            player.seek(seconds);
+        }
+        self.media_status_at(seconds);
+    }
+
+    fn attach_media(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let (controls, mut commands) = media::Controls::attach(window_handle(window));
+        self.media = Some(controls);
+        self.media_task = Some(cx.spawn(async move |this, cx| {
+            while let Some(command) = commands.next().await {
+                if this
+                    .update(cx, |this, cx| this.on_command(command, cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
+        self.media_track();
+        self.media_status();
+    }
+
+    fn on_command(&mut self, command: Command, cx: &mut Context<Self>) {
+        match command {
+            Command::Play if !self.playing => self.toggle(cx),
+            Command::Pause if self.playing => self.toggle(cx),
+            Command::Toggle => self.toggle(cx),
+            Command::Next => self.advance(false, cx),
+            Command::Previous => self.previous(cx),
+            Command::Stop => self.stop(cx),
+            Command::Seek(seconds) => self.seek_to(seconds),
+            Command::SeekBy(delta) => {
+                let position = self.player.as_ref().map_or(0.0, Player::position);
+                self.seek_to((position + delta).max(0.0));
+            }
+            Command::Play | Command::Pause => {}
         }
         cx.notify();
+    }
+
+    fn media_track(&mut self) {
+        let Some(ix) = self.current_index() else {
+            return;
+        };
+        let duration = self.duration();
+        let entry = &self.queue[ix];
+        let art = self
+            .art
+            .as_ref()
+            .filter(|(id, ..)| *id == entry.id)
+            .map(|(.., path)| path.as_path());
+        if let Some(controls) = &mut self.media {
+            controls.set_track(&entry.track.title, duration, art);
+        }
+    }
+
+    fn media_status(&mut self) {
+        let position = if self.loading {
+            0.0
+        } else {
+            self.player.as_ref().map_or(0.0, Player::position)
+        };
+        self.media_status_at(position);
+    }
+
+    fn media_status_at(&mut self, position: f64) {
+        let status = if self.current.is_none() {
+            Status::Stopped
+        } else if self.playing || self.loading {
+            Status::Playing
+        } else {
+            Status::Paused
+        };
+        if let Some(controls) = &mut self.media {
+            controls.set_status(status, position);
+        }
     }
 
     fn duration(&self) -> Option<f64> {
@@ -688,8 +783,8 @@ impl MusicPlayer {
         let cover = self
             .art
             .as_ref()
-            .filter(|(id, _)| self.current == Some(*id))
-            .map(|(_, image)| image.clone());
+            .filter(|(id, ..)| self.current == Some(*id))
+            .map(|(_, image, _)| image.clone());
         let art = div()
             .size(px(40.0))
             .flex_none()
@@ -1174,7 +1269,10 @@ impl Drop for MusicPlayer {
 }
 
 impl Render for MusicPlayer {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.player.is_some() && self.media.is_none() {
+            self.attach_media(window, cx);
+        }
         let theme = Theme::of(cx).for_popup();
         let open = self.popup.is_open();
         let lit = open || self.playing;
@@ -1350,6 +1448,20 @@ fn cover(bytes: &[u8]) -> Option<Arc<RenderImage>> {
         pixel.0.swap(0, 2);
     }
     Some(Arc::new(RenderImage::new([image::Frame::new(pixels)])))
+}
+
+#[cfg(windows)]
+fn window_handle(window: &Window) -> Option<*mut std::ffi::c_void> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as *mut _),
+        _ => None,
+    }
+}
+
+#[cfg(not(windows))]
+fn window_handle(_: &Window) -> Option<*mut std::ffi::c_void> {
+    None
 }
 
 fn format_time(seconds: f64) -> String {

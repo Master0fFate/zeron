@@ -1,3 +1,4 @@
+pub mod media;
 pub mod source;
 
 use std::collections::VecDeque;
@@ -326,12 +327,14 @@ impl Session {
     fn set_playing(&mut self, playing: bool) -> Result<()> {
         if playing {
             self.fill()?;
+        }
+        self.playing = playing;
+        self.shared.playing.store(playing, Ordering::Relaxed);
+        if playing {
             self.stream.play()?;
         } else {
             self.stream.pause()?;
         }
-        self.playing = playing;
-        self.shared.playing.store(playing, Ordering::Relaxed);
         Ok(())
     }
 
@@ -492,7 +495,12 @@ impl Output {
     fn write<T: cpal::SizedSample + cpal::FromSample<f32>>(&self, data: &mut [T]) {
         let volume = f32::from_bits(self.shared.volume.load(Ordering::Relaxed));
         let gain = volume * volume;
-        let mut ring = self.ring.try_lock().ok();
+        let mut ring = self
+            .shared
+            .playing
+            .load(Ordering::Relaxed)
+            .then(|| self.ring.try_lock().ok())
+            .flatten();
         let mut played = 0u64;
         for frame in data.chunks_mut(self.channels.max(1)) {
             let (left, right) = match ring.as_mut().filter(|ring| ring.len() >= 2) {

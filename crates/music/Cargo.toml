@@ -17,5 +17,19 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3.2"
+objc2-app-kit = { version = "0.3.2", features = ["NSImage"] }
+objc2-core-foundation = "0.3.2"
+objc2-media-player = { version = "0.3.2", default-features = false, features = ["std", "MPMediaItem", "MPNowPlayingInfoCenter", "MPRemoteCommand", "MPRemoteCommandCenter", "MPRemoteCommandEvent", "block2", "objc2-app-kit", "objc2-core-foundation"] }
+block2 = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Foundation", "Media", "Storage_Streams", "Win32_Foundation", "Win32_System_WinRT"] }
+
 [dev-dependencies]
 tempfile.workspace = true
