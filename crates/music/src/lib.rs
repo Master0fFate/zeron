@@ -132,6 +132,7 @@ impl Player {
 
 fn run(commands: mpsc::Receiver<Command>, shared: Arc<Shared>, events: UnboundedSender<Event>) {
     let mut session: Option<Session> = None;
+    let mut path: Option<PathBuf> = None;
     loop {
         let active = session.as_ref().is_some_and(|session| session.playing);
         let command = if active {
@@ -147,36 +148,18 @@ fn run(commands: mpsc::Receiver<Command>, shared: Arc<Shared>, events: Unbounded
             }
         };
         match command {
-            Some(Command::Load(path)) => {
-                session = None;
-                shared.playing.store(false, Ordering::Relaxed);
-                match Session::open(&path, shared.clone()) {
-                    Ok(mut opened) => {
-                        let duration = opened.duration;
-                        shared
-                            .duration
-                            .store(duration.unwrap_or(f64::NAN).to_bits(), Ordering::Relaxed);
-                        shared.reset_clock(0.0);
-                        match opened.set_playing(true) {
-                            Ok(()) => {
-                                session = Some(opened);
-                                let _ = events.unbounded_send(Event::Started { duration });
-                            }
-                            Err(err) => {
-                                let _ = events.unbounded_send(Event::Failed(err.to_string()));
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        let _ = events.unbounded_send(Event::Failed(err.to_string()));
-                    }
-                }
+            Some(Command::Load(loaded)) => {
+                drop(session.take());
+                session = start(&loaded, &shared, &events);
+                path = Some(loaded);
             }
             Some(Command::Play) => {
-                if let Some(session) = &mut session
-                    && let Err(err) = session.set_playing(true)
-                {
-                    let _ = events.unbounded_send(Event::Failed(err.to_string()));
+                if let Some(active) = &mut session {
+                    if let Err(err) = active.set_playing(true) {
+                        let _ = events.unbounded_send(Event::Failed(err.to_string()));
+                    }
+                } else if let Some(path) = &path {
+                    session = start(path, &shared, &events);
                 }
             }
             Some(Command::Pause) => {
@@ -184,17 +167,19 @@ fn run(commands: mpsc::Receiver<Command>, shared: Arc<Shared>, events: Unbounded
                     let _ = session.set_playing(false);
                 }
             }
-            Some(Command::Seek(seconds)) => {
-                if let Some(active) = &mut session
-                    && active.seek(seconds).is_err()
-                {
-                    session = None;
-                    shared.playing.store(false, Ordering::Relaxed);
-                    let _ = events.unbounded_send(Event::Ended);
+            Some(Command::Seek(seconds)) => match &mut session {
+                Some(active) => {
+                    if active.seek(seconds).is_err() {
+                        session = None;
+                        shared.playing.store(false, Ordering::Relaxed);
+                        let _ = events.unbounded_send(Event::Ended);
+                    }
                 }
-            }
+                None => shared.reset_clock(seconds),
+            },
             Some(Command::Stop) => {
                 session = None;
+                path = None;
                 shared.playing.store(false, Ordering::Relaxed);
                 shared.reset_clock(0.0);
             }
@@ -216,6 +201,28 @@ fn run(commands: mpsc::Receiver<Command>, shared: Arc<Shared>, events: Unbounded
             let _ = events.unbounded_send(Event::Ended);
         }
     }
+}
+
+fn start(path: &Path, shared: &Arc<Shared>, events: &UnboundedSender<Event>) -> Option<Session> {
+    shared.playing.store(false, Ordering::Relaxed);
+    let mut session = match Session::open(path, shared.clone()) {
+        Ok(session) => session,
+        Err(err) => {
+            let _ = events.unbounded_send(Event::Failed(err.to_string()));
+            return None;
+        }
+    };
+    let duration = session.duration;
+    shared
+        .duration
+        .store(duration.unwrap_or(f64::NAN).to_bits(), Ordering::Relaxed);
+    shared.reset_clock(0.0);
+    if let Err(err) = session.set_playing(true) {
+        let _ = events.unbounded_send(Event::Failed(err.to_string()));
+        return None;
+    }
+    let _ = events.unbounded_send(Event::Started { duration });
+    Some(session)
 }
 
 type Ring = Arc<Mutex<VecDeque<f32>>>;
