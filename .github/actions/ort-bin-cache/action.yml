@@ -17,10 +17,17 @@ runs:
   using: composite
   steps:
     - name: ONNX Runtime cache location
-      shell: bash
+      shell: pwsh
       run: |
-        echo "ORT_CACHE_DIR=$HOME/ort-cache" >> "$GITHUB_ENV"
-        echo "ort-sys binaries cache: $HOME/ort-cache"
+        # pwsh resolves $HOME to a native, drive-qualified absolute path on
+        # every OS. Do not use the bash shell here: git-bash writes
+        # /c/Users/... on Windows, and the path is baked into the build by the
+        # ort-sys build script (DLLs next to the test executables), where a
+        # drive-relative path resolves against the workspace drive and the
+        # loader finds nothing at test startup.
+        $dir = Join-Path $HOME 'ort-cache'
+        "ORT_CACHE_DIR=$dir" >> $env:GITHUB_ENV
+        Write-Host "ort-sys binaries cache: $dir"
     - name: Restore ONNX Runtime binaries
       if: inputs.mode == 'restore'
       id: ort-cache
