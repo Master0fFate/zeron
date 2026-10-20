@@ -249,6 +249,12 @@ pub mod methods {
     pub const CANCEL_HARNESS_UPDATE: &str = "CancelHarnessUpdate";
     pub const DISMISS_HARNESS_UPDATE: &str = "DismissHarnessUpdate";
     pub const SET_HARNESS_UPDATE_POLICY: &str = "SetHarnessUpdatePolicy";
+    pub const WATCH_SCRIPTS: &str = "WatchScripts";
+    pub const RUN_SCRIPT_COMMAND: &str = "RunScriptCommand";
+    pub const RELOAD_SCRIPTS: &str = "ReloadScripts";
+    pub const SET_SCRIPT_ENABLED: &str = "SetScriptEnabled";
+    pub const LIST_SCRIPT_TOOLS: &str = "ListScriptTools";
+    pub const CALL_SCRIPT_TOOL: &str = "CallScriptTool";
 }
 
 /// Stable capability error codes transported without provider stderr.

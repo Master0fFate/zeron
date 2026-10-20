@@ -21,6 +21,7 @@ pub mod capabilities {
     /// The host accepts `SidebarSectionChange::Move` and orders sections by
     /// their placed key; older hosts reject the action outright.
     pub const SIDEBAR_SECTION_ORDER_V1: &str = "sidebar-section-order-v1";
+    pub const SCRIPTS_V1: &str = "scripts-v1";
 
     pub const CURRENT: &[&str] = &[
         COMPOSER_REFERENCES_V1,
@@ -32,6 +33,7 @@ pub mod capabilities {
         HARNESS_UPDATES_V1,
         PROJECTLESS_SCRATCH_V1,
         SIDEBAR_SECTION_ORDER_V1,
+        SCRIPTS_V1,
         crate::voice::remote::CAPABILITY,
     ];
 
