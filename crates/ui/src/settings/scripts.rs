@@ -246,7 +246,7 @@ impl Render for ScriptsPage {
             )
         };
         let action = |id: &'static str, label: &'static str| {
-            widgets::text_action(&theme, widgets::ActionTone::Outlined, label)
+            widgets::text_action(&theme, widgets::ActionTone::Filled, label)
                 .id(id)
                 .tab_index(0)
                 .role(gpui::Role::Button)
