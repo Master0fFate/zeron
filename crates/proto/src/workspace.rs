@@ -129,6 +129,7 @@ mod tests {
                     "projectless-scratch-v1",
                     "sidebar-section-order-v1",
                     "provider-switch-v1",
+                    "scripts-v1",
                     "voice-client-media-v1"
                 ],
             })
