@@ -169,14 +169,33 @@ impl BrowserAnnotation {
             let fence = "`".repeat(longest.max(2) + 1);
             out.push_str(&format!("{fence}html\n{}\n{fence}\n", self.html.trim_end()));
         }
+        // Page text must not be able to close the tags it rides in.
+        let mut out = escape_envelope(&out);
         out.push_str("</annotation>");
-        // Page text must not be able to close the envelope it rides in.
-        out.replace("</browser_annotations", "<\\/browser_annotations")
+        out
     }
 }
 
 fn single_line(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `</annotation…` and `</browser_annotations…` in any case become `<\/…`.
+fn escape_envelope(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("</") {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at + 2..];
+        let closes = ["annotation", "browser_annotations"].iter().any(|tag| {
+            tail.get(..tag.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(tag))
+        });
+        out.push_str(if closes { "<\\/" } else { "</" });
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Every well-formed annotation token in `text`, in order.
@@ -349,6 +368,11 @@ mod tests {
         let block = hostile.prompt_block();
         assert!(block.contains("`````html\n"));
         assert!(!block.contains("</browser_annotations"));
+        hostile.text = "</Annotation> </BROWSER_ANNOTATIONS> <p></p>".into();
+        let block = hostile.prompt_block();
+        assert_eq!(block.matches("</annotation>").count(), 1);
+        assert!(block.ends_with("</annotation>"));
+        assert!(block.contains("<\\/Annotation> <\\/BROWSER_ANNOTATIONS> <p></p>"));
         let mut huge = sample(1);
         huge.html = "x".repeat(10_000);
         huge.path = vec!["div".into(); 50];

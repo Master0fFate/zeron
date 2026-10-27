@@ -2501,6 +2501,16 @@ impl Shell {
                         }
                     }
                 }
+                ComposerEvent::AnnotationHovered(number) => {
+                    let key = this.panel_key(cx);
+                    for surface in this.right_tabs.get(&key).into_iter().flatten() {
+                        if let RightSurface::Browser(id) = surface
+                            && let Some(browser) = this.browsers.get(id)
+                        {
+                            browser.read(cx).focus_marker(*number);
+                        }
+                    }
+                }
                 ComposerEvent::NewThreadTransitionStarted => {
                     // Route observation drives the dock once selection commits.
                     cx.notify();

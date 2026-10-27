@@ -90,7 +90,47 @@ const ANNOTATION_POLL: std::time::Duration = std::time::Duration::from_millis(10
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 struct AnnotationSession {
     nonce: u32,
+    /// Picks received so far; the session ends at [`MAX_ANNOTATION_PICKS`].
+    picks: usize,
+    /// Polls in a row that returned nothing readable.
+    misses: u32,
     _poll: gpui::Task<()>,
+}
+
+/// One session's picks. The page's script answers the polls, so a hostile
+/// page could otherwise stream chips into the draft without a click.
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+const MAX_ANNOTATION_PICKS: usize = 24;
+/// Unreadable polls (about two seconds' worth) before the session gives up.
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+const MAX_ANNOTATION_MISSES: u32 = 20;
+
+/// The overlay's palette and type, so the page chrome reads as Zeron's.
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+fn annotation_theme(cx: &App) -> serde_json::Value {
+    let theme = crate::theme::Theme::of(cx);
+    let css = |color: gpui::Hsla| {
+        let rgba: gpui::Rgba = color.into();
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            byte(rgba.r),
+            byte(rgba.g),
+            byte(rgba.b),
+            byte(rgba.a)
+        )
+    };
+    serde_json::json!({
+        "accent": css(theme.accent),
+        "surface": css(theme.surface_dialog),
+        "border": css(theme.border),
+        "text": css(theme.text),
+        "muted": css(theme.text_muted),
+        "faint": css(theme.text_faint),
+        "chip": css(theme.ink(0.09)),
+        "dark": theme.appearance.is_dark(),
+        "font": crate::typography::effective_family_name(cx).to_string(),
+    })
 }
 
 /// A profile's website data, allocated on first navigation. Default contexts are
@@ -517,21 +557,10 @@ impl BrowserSurface {
             return;
         }
         // Below 2^32, so the page's JavaScript numbers hold it exactly.
-        let nonce = (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(1)
-            ^ 0x5a17_c0de)
-            .max(1);
-        let accent: gpui::Rgba = crate::theme::Theme::of(cx).accent.into();
-        let accent = format!(
-            "#{:02x}{:02x}{:02x}",
-            (accent.r * 255.0).round() as u8,
-            (accent.g * 255.0).round() as u8,
-            (accent.b * 255.0).round() as u8
-        );
+        let nonce = (uuid::Uuid::new_v4().as_u128() as u32).max(1);
         self.evaluate(&format!(
-            "{ANNOTATE_SCRIPT}\n;window.__zeronAnnotator.start({nonce}, {accent:?}); 'started'"
+            "{ANNOTATE_SCRIPT}\n;window.__zeronAnnotator.start({nonce}, {}); 'started'",
+            annotation_theme(cx)
         ));
         #[cfg(windows)]
         if let Some(native) = &self.native {
@@ -547,7 +576,7 @@ impl BrowserSurface {
                         .is_some_and(|session| session.nonce == nonce);
                     if live {
                         this.evaluate(&format!(
-                            "(() => {{ const a = window.__zeronAnnotator; return a ? a.take({nonce}) : null; }})()"
+                            "(() => {{ const a = window.__zeronAnnotator; return a ? a.take({nonce}) : '{{\"state\":\"gone\"}}'; }})()"
                         ));
                     }
                     live
@@ -557,7 +586,12 @@ impl BrowserSurface {
                 }
             }
         });
-        self.annotation = Some(AnnotationSession { nonce, _poll: poll });
+        self.annotation = Some(AnnotationSession {
+            nonce,
+            picks: 0,
+            misses: 0,
+            _poll: poll,
+        });
         cx.emit(BrowserEvent::Changed);
         cx.notify();
     }
@@ -576,8 +610,8 @@ impl BrowserSurface {
         let _ = cx;
     }
 
-    /// Picks arrive as the poll's string result. `None` means the picker is
-    /// gone (the page navigated or closed), which ends the session.
+    /// Picks arrive as the poll's string result. A `gone` state means the
+    /// picker left the page (it navigated), which ends the session.
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     fn on_evaluated(&mut self, value: Option<String>, cx: &mut Context<Self>) {
         #[derive(serde::Deserialize)]
@@ -593,21 +627,25 @@ impl BrowserSurface {
             #[serde(default)]
             picks: Vec<Pick>,
         }
-        if self.annotation.is_none() {
-            return;
-        }
-        let Some(text) = value else {
-            self.annotation = None;
-            cx.emit(BrowserEvent::Changed);
-            cx.notify();
+        let Some(session) = self.annotation.as_mut() else {
             return;
         };
-        let Ok(poll) = serde_json::from_str::<Poll>(&text) else {
-            return; // the start/stop acknowledgements
+        let Some(poll) = value.and_then(|text| serde_json::from_str::<Poll>(&text).ok()) else {
+            // Acknowledgements, other scripts' results, or a page that is
+            // briefly unreachable. Only a run of these ends the session.
+            session.misses += 1;
+            if session.misses >= MAX_ANNOTATION_MISSES {
+                self.stop_annotation(cx);
+            }
+            return;
         };
-        let finished = poll.state != "active";
-        let count = poll.picks.len();
-        for (index, pick) in poll.picks.into_iter().enumerate() {
+        session.misses = 0;
+        let room = MAX_ANNOTATION_PICKS.saturating_sub(session.picks);
+        let picks: Vec<Pick> = poll.picks.into_iter().take(room).collect();
+        session.picks += picks.len();
+        let finished = poll.state != "active" || session.picks >= MAX_ANNOTATION_PICKS;
+        let count = picks.len();
+        for (index, pick) in picks.into_iter().enumerate() {
             cx.emit(BrowserEvent::Annotation {
                 annotation: pick.annotation.bounded(),
                 marker: pick.marker,
@@ -615,9 +653,9 @@ impl BrowserSurface {
             });
         }
         if finished {
-            self.annotation = None;
-            cx.emit(BrowserEvent::Changed);
-            cx.notify();
+            // `stop` tidies the page's overlay when the cap, not the page,
+            // ended the session.
+            self.stop_annotation(cx);
         }
     }
 
@@ -639,6 +677,17 @@ impl BrowserSurface {
         ));
         #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
         let _ = numbers;
+    }
+
+    /// Emphasize the marker of the chip under the pointer (`None`: none).
+    pub fn focus_marker(&self, number: Option<u32>) {
+        #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+        self.evaluate(&format!(
+            "(() => {{ window.__zeronAnnotator?.focus({}); return 'ok'; }})()",
+            number.unwrap_or(0)
+        ));
+        #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+        let _ = number;
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]

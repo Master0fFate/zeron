@@ -6,30 +6,61 @@ works wherever pages embed: macOS, Linux and Windows.
 
 ## Picking
 
-`browser/annotate.js` is injected only while picking and removed afterwards. A
-highlight box and a `tag.class · w × h` label follow the pointer inside a
-closed shadow root, so page styles cannot reach it and hit testing is
-unchanged. A click picks the element and ends the mode; Shift+click picks
-several; Escape (in the page or the toolbar) or the button cancels. Page
-clicks are swallowed while picking. The host polls `take(nonce)` every 100 ms
-only while a pick is active; navigation ends the session.
+`browser/annotate.js` is injected only while picking. Its overlay lives in
+closed shadow roots, so page styles cannot reach it and hit testing is
+unchanged, and it takes the app's theme (accent, popover surface, border, text
+and UI font) from the host, so it reads as Zeron chrome in light and dark.
 
-Each picked element keeps an outline with its chip's number on the page. It
-follows scroll, resizes and layout changes, repainting only when something
-moves. Removing a chip, or sending the message, removes its marker; reloading
-the page clears them all.
+- The hovered element gets an accent outline that follows its corner radius,
+  and a popover-style label: an icon well (or the element's number once it is
+  picked), the tag, its `#id.class` and `w × h`.
+- A hint pill names the mode and its keys: **Click an element to annotate**,
+  <kbd>⇧</kbd> **Add more**, <kbd>Esc</kbd> **Done**. It moves to the top when
+  the pointer is near the bottom of the page.
+- A click picks the element and ends the mode; Shift+click picks several (the
+  hint counts them); Escape (in the page or the toolbar) or the button ends it.
+  Page clicks are swallowed while picking.
+
+The host polls `take(nonce)` every 100 ms only while a pick is active. When the
+page navigates, the poll reports `gone` and the session ends.
+
+Each picked element keeps an outline and a numbered badge matching its chip.
+The badge stays inside the viewport, and markers repaint only when something
+moves (scroll, resize, layout or DOM changes). Hovering a chip in the
+composer highlights its element's marker. Removing a chip, or sending the
+message, removes its marker; reloading the page clears them all. Animations
+respect `prefers-reduced-motion`.
 
 Each pick captures, with fixed limits: element (`tag#id.class`), a unique
 selector, up to eight ancestors, role and accessible name, visible text (200
 chars), an HTML excerpt (children beyond depth 2 collapsed, at most 12
 attributes and 2,000 chars), the viewport box, and about 20 non-default
-computed styles. Input values, password fields and `on*`, token, secret or
-session attributes are never captured. No screenshot is taken.
+computed styles. No screenshot is taken.
+
+## Page content is untrusted
+
+The picker runs in the page's own JavaScript world, so the host treats
+everything it returns as page data:
+
+- Only trusted input picks. Synthetic `click`/`keydown` events from page script
+  are ignored, and the picker object is frozen once defined.
+- One session takes at most 24 picks, and every field is bounded again in Rust.
+  Chip numbers are assigned by the composer, never by the page.
+- Input and textarea values, contenteditable text, `on*` handlers, and
+  attributes named like secrets (`token`, `secret`, `auth`, `session`, `csrf`,
+  …) are never captured. Credentials in URLs (userinfo, and query or fragment
+  keys like `token`, `code`, `state`, `sig`) and opaque values (JWTs, long
+  base64 or hex) read as `…`, both in attributes and in the page URL.
+- The harness block says the content is untrusted data. Page text cannot close
+  `</annotation>` or `</browser_annotations>` in any letter case, and code
+  fences are longer than any backtick run inside them.
 
 ## In the composer and transcript
 
-A pick becomes an inline chip: a globe and `Annotation N`, numbered after the
-draft's existing annotations. Hovering shows the opening of its code. The
+A pick becomes an inline chip in the standard chip style: the toolbar's
+annotate glyph and `Annotation N`, numbered after the draft's existing
+annotations. Hovering it shows the element and its size above the opening of
+its code. The
 draft stores one Markdown token per annotation,
 `[Annotation N](zeron-annotation:<hex JSON>)`, like skill invocations, so
 drafts, queueing, the persisted message and the transcript chip all carry the
@@ -66,8 +97,7 @@ Styles: display: block; padding: 22px; border-radius: 14px
 </browser_annotations>
 ```
 
-Fences are longer than any backtick run in the excerpt, and page text cannot
-close the envelope. Field limits are enforced again when a token is parsed.
+Field limits are enforced again when a token is parsed.
 
 `cargo run --locked -p zeron-ui --example browser-annotation-fixture --features appshots-fixture`
 opens an isolated session with a local mock site to try it.

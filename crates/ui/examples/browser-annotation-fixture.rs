@@ -88,9 +88,10 @@ fn main() -> anyhow::Result<()> {
     core.workspace
         .rename_chat("annotations", "Polish the pricing page")?;
     let ipc_port = port();
-    let _ipc = runtime.block_on(zeron_engine::serve_ipc(ipc_port, core.rpc_service()))?;
     let data = temp.path().join("ui");
     std::fs::create_dir(&data)?;
+    // Publish the IPC bearer where the attaching viewport looks for it.
+    let _ipc = runtime.block_on(zeron_engine::serve_ipc(ipc_port, &data, core.rpc_service()))?;
     let boot = EngineBootConfig {
         data_dir: data.clone(),
         ipc_port,
@@ -204,8 +205,14 @@ And shorten the feature lists."}]}]}
                 cx,
             );
             theme_library::init(data.clone(), cx);
+            // ZERON_FIXTURE_LIGHT=1: the light appearance.
+            let mode = if std::env::var_os("ZERON_FIXTURE_LIGHT").is_some() {
+                appearance::AppearanceMode::Light
+            } else {
+                appearance::AppearanceMode::Dark
+            };
             appearance::init(
-                appearance::AppearanceMode::Dark,
+                mode,
                 settings.theme_selection,
                 settings.accent,
                 settings.surface,

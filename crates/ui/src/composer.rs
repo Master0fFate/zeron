@@ -961,9 +961,18 @@ const ANNOTATION_SNIPPET_LINES: usize = 4;
 /// Air between an annotation chip and its preview.
 const ANNOTATION_TOOLTIP_GAP: f32 = 6.0;
 
+/// The hover card's element row, above its code.
+const ANNOTATION_HEADER_HEIGHT: f32 = 28.0;
+
 fn annotation_tooltip_height(annotation: &zeron_proto::annotation::BrowserAnnotation) -> f32 {
-    let lines = annotation.snippet(ANNOTATION_SNIPPET_LINES).lines().count().max(1);
-    lines as f32 * 16.0 + 16.0
+    let lines = annotation.snippet(ANNOTATION_SNIPPET_LINES).lines().count();
+    // Border, element row, hairline, then the code with its padding.
+    let code = if lines == 0 {
+        0.0
+    } else {
+        1.0 + lines as f32 * 16.0 + 14.0
+    };
+    2.0 + ANNOTATION_HEADER_HEIGHT + code
 }
 
 /// A private URI scheme keeps file mentions distinguishable from ordinary
@@ -1916,6 +1925,8 @@ pub enum ComposerInputEvent {
     },
     /// An image chip was clicked: open its picture full size.
     OpenAttachment(u32),
+    /// The pointer moved onto (or off) an annotation chip.
+    AnnotationHovered(Option<u32>),
 }
 
 #[derive(Clone)]
@@ -2157,6 +2168,8 @@ pub struct ComposerInput {
     /// into another draft can tell it must not reuse their numbers.
     attachment_scope: String,
     mention_tooltip: MentionTooltipPhase,
+    /// The annotation chip under the pointer, as last reported.
+    hovered_annotation: Option<u32>,
     mention_tooltip_generation: u64,
     mention_tooltip_popup: Option<Bounds<Pixels>>,
     mention_tooltip_task: Option<Task<()>>,
@@ -2248,6 +2261,7 @@ impl ComposerInput {
             attachment_chips: None,
             attachment_scope: String::new(),
             mention_tooltip: MentionTooltipPhase::Hidden,
+            hovered_annotation: None,
             mention_tooltip_generation: 0,
             mention_tooltip_popup: None,
             mention_tooltip_task: None,
@@ -2805,6 +2819,21 @@ impl ComposerInput {
     }
 
     fn on_mention_pointer_move(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        // The browser points at a hovered annotation chip's element at once,
+        // ahead of the delayed code card.
+        let annotation = (!self.is_selecting)
+            .then(|| {
+                self.mention_hits
+                    .iter()
+                    .find(|hit| hit.bounds.contains(&position))
+                    .and_then(|hit| hit.target.annotation.as_ref())
+                    .map(|annotation| annotation.index)
+            })
+            .flatten();
+        if annotation != self.hovered_annotation {
+            self.hovered_annotation = annotation;
+            cx.emit(ComposerInputEvent::AnnotationHovered(annotation));
+        }
         if self.is_selecting {
             self.invalidate_mention_tooltip();
             return;
@@ -4982,13 +5011,73 @@ struct MentionPathTooltip {
 }
 
 impl MentionPathTooltip {
-    /// At a glance: the element's code, nothing else.
+    /// At a glance: which element (with its size, like the page's label)
+    /// and the opening of its code.
     fn annotation_card(
         annotation: &zeron_proto::annotation::BrowserAnnotation,
         activation: u64,
         theme: &Theme,
     ) -> gpui::AnyElement {
         let snippet = annotation.snippet(ANNOTATION_SNIPPET_LINES);
+        let tag_len = annotation
+            .element
+            .find(['#', '.'])
+            .unwrap_or(annotation.element.len());
+        let (tag, rest) = annotation.element.split_at(tag_len);
+        let [_, _, width, height] = annotation.rect;
+        let header = div()
+            .h(px(ANNOTATION_HEADER_HEIGHT))
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .px(px(10.0))
+            .text_size(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .min_w_0()
+                    .truncate()
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child(SharedString::from(tag.to_owned())),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_color(theme.text_muted)
+                            .child(SharedString::from(rest.to_owned())),
+                    ),
+            )
+            .when(width > 0 || height > 0, |row| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .ml_auto()
+                        .pl(px(8.0))
+                        .text_color(theme.text_faint)
+                        .child(SharedString::from(format!("{width} × {height}"))),
+                )
+            });
+        let code = (!snippet.is_empty()).then(|| {
+            div()
+                .border_t_1()
+                .border_color(theme.border)
+                .px(px(10.0))
+                .py(px(7.0))
+                .font_family(theme.font_mono.clone())
+                .text_size(px(11.0))
+                .line_height(px(16.0))
+                .text_color(theme.text_muted)
+                .children(snippet.lines().map(|line| {
+                    div()
+                        .h(px(16.0))
+                        .truncate()
+                        .child(SharedString::from(line.to_owned()))
+                }))
+        });
         motion::fade_quick(
             ("annotation-chip-tooltip", activation),
             div().child(crate::frost::frosted(
@@ -4996,20 +5085,11 @@ impl MentionPathTooltip {
                 crate::frost::MENU_BLUR,
                 crate::popover::popover_card(theme)
                     .h(px(annotation_tooltip_height(annotation)))
-                    .max_w(px(420.0))
+                    .w(px(360.0))
                     .p_0()
-                    .px(px(10.0))
-                    .py(px(8.0))
-                    .font_family(theme.font_mono.clone())
-                    .text_size(px(11.0))
-                    .line_height(px(16.0))
-                    .text_color(theme.text_muted)
-                    .children(snippet.lines().map(|line| {
-                        div()
-                            .h(px(16.0))
-                            .truncate()
-                            .child(SharedString::from(line.to_owned()))
-                    })),
+                    .gap_0()
+                    .child(header)
+                    .children(code),
             )),
         )
         .into_any_element()
@@ -5156,10 +5236,16 @@ impl gpui::Element for ComposerTextElement {
             };
             // The path tooltip stays flush so the pointer can move onto it; an
             // annotation's code preview floats a little above its chip.
-            let (tooltip_height, tooltip_gap) = mention.annotation.as_deref().map_or(
-                (MENTION_TOOLTIP_HEIGHT, 1.0),
-                |annotation| (annotation_tooltip_height(annotation), ANNOTATION_TOOLTIP_GAP),
-            );
+            let (tooltip_height, tooltip_gap) =
+                mention
+                    .annotation
+                    .as_deref()
+                    .map_or((MENTION_TOOLTIP_HEIGHT, 1.0), |annotation| {
+                        (
+                            annotation_tooltip_height(annotation),
+                            ANNOTATION_TOOLTIP_GAP,
+                        )
+                    });
             let label = chip_pad_ranges(display)[0].end;
             for local_bounds in input.bounds_for_display_range(display.clone()) {
                 let row_top = origin.y + local_bounds.origin.y;
@@ -5595,6 +5681,8 @@ pub enum ComposerEvent {
     WorkspaceCommand(WorkspaceCommand),
     /// The annotation numbers the draft holds changed.
     AnnotationsChanged(Vec<u32>),
+    /// The pointer is on this annotation's chip (`None`: on none).
+    AnnotationHovered(Option<u32>),
     /// Arm the shared-element transition before the draft route is replaced
     /// by the newly-created session. Emitting this before `select_chat` keeps
     /// the first destination frame on the same timeline as the source frame.
@@ -6511,6 +6599,9 @@ impl Composer {
                 }
             }
             ComposerInputEvent::OpenAttachment(index) => this.open_attachment(*index, cx),
+            ComposerInputEvent::AnnotationHovered(number) => {
+                cx.emit(ComposerEvent::AnnotationHovered(*number))
+            }
             ComposerInputEvent::PastedImages(images) => {
                 let images = images.clone();
                 this.stage_in_background(
@@ -14181,7 +14272,7 @@ mod tests {
     }
 
     #[test]
-    fn annotation_tokens_project_to_globe_chips_in_drafts_and_sent_messages() {
+    fn annotation_tokens_project_to_annotate_chips_in_drafts_and_sent_messages() {
         let raw = format!("Fix {} now", button_annotation().link());
         let projection = TextProjection::new(&raw);
         assert_eq!(projection.mentions.len(), 1);
@@ -14190,7 +14281,7 @@ mod tests {
         assert_eq!(link.kind, ChipKind::Annotation);
         assert!(matches!(
             chip_icon(link.kind, &link.path, crate::theme::Appearance::Dark),
-            ChipIcon::Glyph(crate::icons::GLOBE)
+            ChipIcon::Glyph(crate::icons::CURSOR_SQUARE)
         ));
         assert!(projection.display[display.clone()].contains("Annotation\u{a0}1"));
         let (text, spans) = sent_mention_display(&raw).unwrap();

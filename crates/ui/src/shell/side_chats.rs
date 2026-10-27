@@ -335,7 +335,8 @@ impl Shell {
                         // never runs worktree setup of its own.
                         ComposerEvent::NewThreadTransitionStarted
                         | ComposerEvent::WorktreeSetup { .. }
-                        | ComposerEvent::AnnotationsChanged(_) => {}
+                        | ComposerEvent::AnnotationsChanged(_)
+                        | ComposerEvent::AnnotationHovered(_) => {}
                         ComposerEvent::Sent {
                             chat_id,
                             message_id,
