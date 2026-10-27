@@ -195,19 +195,29 @@
   // out of the outline's top edge (or hangs inside it near the viewport top).
   const FLAG_CSS = `.flag{position:fixed;display:none;align-items:center;height:${FLAG}px;padding:0 7px;border-radius:${CORNER}px 5px 0 0;
       background:var(--accent);color:var(--on-accent);font:500 11px/1 var(--font);white-space:nowrap;overflow:hidden;max-width:min(70vw,440px)}
-    .flag.inside{border-radius:0 0 5px 0}
     .flag b,.flag .n{font-weight:650}
     .flag .n,.flag .dim{font-variant-numeric:tabular-nums;flex:none}
     .flag .cls{opacity:.72;overflow:hidden;text-overflow:ellipsis}
     .flag .n{margin-right:6px}
     .flag .dim{opacity:.6;margin-left:6px}`;
-  const flagAt = (flag, box, height) => {
-    const left = Math.max(0, Math.min(box.left, innerWidth - flag.offsetWidth));
+  // A flag's corners meet the outline where they touch it and round where
+  // they hang free: past the outline's right end, or when the viewport's
+  // edge pushes the flag left of it. Under a full-width flag the outline's
+  // top-right corner squares off to meet it.
+  const flagAt = (flag, box, height, outline) => {
+    const width = flag.offsetWidth;
+    const left = Math.max(0, Math.min(box.left, innerWidth - width));
     const above = box.top - height + BORDER;
     const inside = above < 2;
-    flag.classList.toggle('inside', inside);
+    const r = (free) => (free ? '5px' : '0');
+    const pastRight = left + width > box.left + box.width;
+    const pastLeft = left < box.left;
     flag.style.left = left + 'px';
     flag.style.top = (inside ? Math.max(box.top, 0) : above) + 'px';
+    flag.style.borderRadius = inside
+      ? `0 ${r(pastRight)} 5px ${r(pastLeft)}`
+      : `${pastLeft ? '5px' : CORNER + 'px'} 5px ${r(pastRight)} ${r(pastLeft)}`;
+    if (!inside && pastRight) outline.style.borderTopRightRadius = CORNER + 'px';
   };
 
   const mount = () => {
@@ -256,7 +266,7 @@
     ui.box.style.display = 'block';
     label(target, r);
     ui.flag.style.display = 'flex';
-    flagAt(ui.flag, box, FLAG);
+    flagAt(ui.flag, box, FLAG, ui.box);
     // Keep the hint off the element being pointed at.
     ui.hint.classList.toggle('top', r.bottom > innerHeight - 60 && r.top > 60);
   };
@@ -283,7 +293,7 @@
       mark.tab.style.display = mark.small ? 'none' : 'flex';
       mark.flag.style.display = mark.small ? 'flex' : 'none';
       if (mark.small) {
-        flagAt(mark.flag, box, TAB);
+        flagAt(mark.flag, box, TAB, mark.box);
       } else {
         // An outline cut off by the viewport's top keeps its number in view.
         const hidden = Math.max(0, -box.top);
