@@ -13,11 +13,13 @@ and UI font) from the host, so it reads as Zeron chrome in light and dark.
 
 - Outlines sit just outside the element (a 2px gap, then a 1.5px accent
   line) and round like it, so they never draw over the element's own border.
+  The top-left corner carries the label, so it stays nearly square and the
+  label sits flush against the outline's left edge.
 - The hovered element's label is an accent flag growing out of the outline's
   top edge (hanging inside it near the top of the viewport): the tag, its
   `#id.class` and `w × h`, led by its number once it is picked.
-- A hint pill names the mode and its keys: **Select an element**,
-  <kbd>⇧</kbd> **Add more**, <kbd>Esc</kbd> **Done**. It moves to the top when
+- A hint pill names the mode and its keys: **Select an element** |
+  **Shift**-click to add · **Esc** to finish. It moves to the top when
   the pointer is near the bottom of the page.
 - A click picks the element and ends the mode; Shift+click picks several (the
   hint counts them); Escape (in the page or the toolbar) or the button ends it.
@@ -27,7 +29,7 @@ The host polls `take(nonce)` every 100 ms only while a pick is active. When the
 page navigates, the poll reports `gone` and the session ends.
 
 Each picked element keeps its outline, numbered like its chip. The number is
-a tab cut into the outline's top-left corner, sharing its radius; an element
+a tab in the outline's top-left corner, flush with its edges; an element
 too small to hold one wears it as a flag on its top edge instead. The number
 stays in view when the outline is cut off by the viewport, and markers
 repaint only when something moves (scroll, resize, layout or DOM changes).

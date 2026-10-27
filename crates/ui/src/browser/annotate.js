@@ -172,13 +172,16 @@
   };
   // Outlines sit just outside the element (a gap, then the 1.5px line), so
   // they never draw over its own border, and round like it does.
-  const BORDER = 1.5, GAP = 2, OUT = BORDER + GAP, FLAG = 20, TAB = 18;
+  // The top-left corner carries the label, so it stays nearly square and the
+  // label sits flush against the outline's left edge.
+  const BORDER = 1.5, GAP = 2, OUT = BORDER + GAP, FLAG = 20, TAB = 18, CORNER = 2;
   const ring = (el, r) => {
     const own = Math.min(parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0, r.width / 2, r.height / 2);
     return { left: r.left - OUT, top: r.top - OUT, width: r.width + OUT * 2, height: r.height + OUT * 2, radius: Math.min(own + OUT, 18) || 4 };
   };
   const place = (node, box) => Object.assign(node.style, {
-    left: box.left + 'px', top: box.top + 'px', width: box.width + 'px', height: box.height + 'px', borderRadius: box.radius + 'px',
+    left: box.left + 'px', top: box.top + 'px', width: box.width + 'px', height: box.height + 'px',
+    borderRadius: `${CORNER}px ${box.radius}px ${box.radius}px ${box.radius}px`,
   });
   const shadowHost = (tag, z, css) => {
     const node = document.createElement(tag);
@@ -190,16 +193,16 @@
   };
   // The accent flag: the hover label and a small element's number. It grows
   // out of the outline's top edge (or hangs inside it near the viewport top).
-  const FLAG_CSS = `.flag{position:fixed;display:none;align-items:center;height:${FLAG}px;padding:0 7px;border-radius:5px 5px 0 0;
+  const FLAG_CSS = `.flag{position:fixed;display:none;align-items:center;height:${FLAG}px;padding:0 7px;border-radius:${CORNER}px 5px 0 0;
       background:var(--accent);color:var(--on-accent);font:500 11px/1 var(--font);white-space:nowrap;overflow:hidden;max-width:min(70vw,440px)}
-    .flag.inside{border-radius:0 0 5px 5px}
+    .flag.inside{border-radius:0 0 5px 0}
     .flag b,.flag .n{font-weight:650}
     .flag .n,.flag .dim{font-variant-numeric:tabular-nums;flex:none}
     .flag .cls{opacity:.72;overflow:hidden;text-overflow:ellipsis}
     .flag .n{margin-right:6px}
     .flag .dim{opacity:.6;margin-left:6px}`;
   const flagAt = (flag, box, height) => {
-    const left = Math.max(4, Math.min(box.left + Math.max(box.radius, 6), innerWidth - flag.offsetWidth - 4));
+    const left = Math.max(0, Math.min(box.left, innerWidth - flag.offsetWidth));
     const above = box.top - height + BORDER;
     const inside = above < 2;
     flag.classList.toggle('inside', inside);
@@ -213,21 +216,20 @@
       .box{position:fixed;display:none;border:${BORDER}px solid var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent);
         transition:left 80ms ease-out,top 80ms ease-out,width 80ms ease-out,height 80ms ease-out,border-radius 80ms ease-out}
       ${FLAG_CSS}
-      .hint{position:fixed;left:50%;bottom:14px;display:flex;align-items:center;gap:10px;height:32px;padding:0 6px 0 11px;border-radius:10px;
+      .hint{position:fixed;left:50%;bottom:16px;display:flex;align-items:center;gap:10px;height:30px;padding:0 12px 0 11px;border-radius:9px;
         background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow);font:500 12px/1 var(--font);color:var(--text);white-space:nowrap;
         transform:translate(-50%,0);transition:opacity 140ms ease-out,transform 140ms ease-out}
       .hint.enter{opacity:0;transform:translate(-50%,4px)}
-      .hint.top{bottom:auto;top:14px}
+      .hint.top{bottom:auto;top:16px}
       .hint .dot{width:6px;height:6px;border-radius:3px;background:var(--accent);flex:none}
-      .hint .keys{display:flex;align-items:center;gap:5px;color:var(--muted);font-weight:400}
-      .hint .keys kbd+span+kbd{margin-left:6px}
-      .hint kbd{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:5px;
-        background:var(--chip);color:var(--text);font:500 11px/1 var(--font)}
+      .hint .sep{width:1px;height:12px;background:var(--border);flex:none}
+      .hint .keys{color:var(--muted);font-weight:400}
+      .hint .keys b{color:var(--text);font-weight:600}
       @media (prefers-reduced-motion:reduce){.box,.hint{transition:none}}
     `);
     root.innerHTML += `<div class="box"></div><div class="flag"></div>
-      <div class="hint enter"><span class="dot"></span><span class="title">Select an element</span>
-      <span class="keys"><kbd>⇧</kbd><span>Add more</span><kbd>Esc</kbd><span>Done</span></span></div>`;
+      <div class="hint enter"><span class="dot"></span><span class="title">Select an element</span><span class="sep"></span>
+      <span class="keys"><b>Shift</b>-click to add&ensp;·&ensp;<b>Esc</b> to finish</span></div>`;
     ui = { box: root.querySelector('.box'), flag: root.querySelector('.flag'), hint: root.querySelector('.hint'), title: root.querySelector('.title') };
     requestAnimationFrame(() => ui && ui.hint.classList.remove('enter'));
     const cursor = document.createElement('style');
@@ -283,8 +285,6 @@
       if (mark.small) {
         flagAt(mark.flag, box, TAB);
       } else {
-        mark.tab.style.borderRadius = `${Math.min(box.radius, TAB)}px 0 6px 0`;
-        mark.tab.style.paddingLeft = Math.max(6, box.radius * 0.45) + 'px';
         // An outline cut off by the viewport's top keeps its number in view.
         const hidden = Math.max(0, -box.top);
         mark.tab.style.transform = hidden ? `translateY(${Math.min(hidden, box.height - TAB)}px)` : '';
@@ -300,7 +300,7 @@
           transition:background-color 120ms ease-out}
         .mark.focus{background:color-mix(in srgb,var(--accent) 16%,transparent)}
         .tab{position:absolute;left:-${BORDER}px;top:-${BORDER}px;display:flex;align-items:center;justify-content:center;
-          min-width:24px;height:${TAB}px;padding:0 7px 0 6px;background:var(--accent);color:var(--on-accent);
+          min-width:20px;height:${TAB}px;padding:0 6px;border-radius:${CORNER}px 0 5px 0;background:var(--accent);color:var(--on-accent);
           font:650 11px/1 var(--font);font-variant-numeric:tabular-nums}
         .tab:empty{visibility:hidden}
         ${FLAG_CSS}
