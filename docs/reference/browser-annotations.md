@@ -11,10 +11,12 @@ closed shadow roots, so page styles cannot reach it and hit testing is
 unchanged, and it takes the app's theme (accent, popover surface, border, text
 and UI font) from the host, so it reads as Zeron chrome in light and dark.
 
-- The hovered element gets an accent outline that follows its corner radius,
-  and a popover-style label: an icon well (or the element's number once it is
-  picked), the tag, its `#id.class` and `w × h`.
-- A hint pill names the mode and its keys: **Click an element to annotate**,
+- Outlines sit just outside the element (a 2px gap, then a 1.5px accent
+  line) and round like it, so they never draw over the element's own border.
+- The hovered element's label is an accent flag growing out of the outline's
+  top edge (hanging inside it near the top of the viewport): the tag, its
+  `#id.class` and `w × h`, led by its number once it is picked.
+- A hint pill names the mode and its keys: **Select an element**,
   <kbd>⇧</kbd> **Add more**, <kbd>Esc</kbd> **Done**. It moves to the top when
   the pointer is near the bottom of the page.
 - A click picks the element and ends the mode; Shift+click picks several (the
@@ -24,10 +26,12 @@ and UI font) from the host, so it reads as Zeron chrome in light and dark.
 The host polls `take(nonce)` every 100 ms only while a pick is active. When the
 page navigates, the poll reports `gone` and the session ends.
 
-Each picked element keeps an outline and a numbered badge matching its chip.
-The badge stays inside the viewport, and markers repaint only when something
-moves (scroll, resize, layout or DOM changes). Hovering a chip in the
-composer highlights its element's marker. Removing a chip, or sending the
+Each picked element keeps its outline, numbered like its chip. The number is
+a tab cut into the outline's top-left corner, sharing its radius; an element
+too small to hold one wears it as a flag on its top edge instead. The number
+stays in view when the outline is cut off by the viewport, and markers
+repaint only when something moves (scroll, resize, layout or DOM changes).
+Hovering a chip in the composer deepens its element's outline fill. Removing a chip, or sending the
 message, removes its marker; reloading the page clears them all. Animations
 respect `prefers-reduced-motion`.
 
@@ -57,8 +61,8 @@ everything it returns as page data:
 
 ## In the composer and transcript
 
-A pick becomes an inline chip in the standard chip style: the toolbar's
-annotate glyph and `Annotation N`, numbered after the draft's existing
+A pick becomes an inline chip in the standard chip style: a pointer glyph in
+the chip's well (a line icon like the other chip kinds') and `Annotation N`, numbered after the draft's existing
 annotations. Hovering it shows the element and its size above the opening of
 its code. The
 draft stores one Markdown token per annotation,

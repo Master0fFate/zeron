@@ -14281,7 +14281,7 @@ mod tests {
         assert_eq!(link.kind, ChipKind::Annotation);
         assert!(matches!(
             chip_icon(link.kind, &link.path, crate::theme::Appearance::Dark),
-            ChipIcon::Glyph(crate::icons::CURSOR_SQUARE)
+            ChipIcon::Glyph(crate::icons::CURSOR)
         ));
         assert!(projection.display[display.clone()].contains("Annotation\u{a0}1"));
         let (text, spans) = sent_mention_display(&raw).unwrap();

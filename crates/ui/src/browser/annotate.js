@@ -21,7 +21,6 @@
     'line-height','color','background-color','background-image','border','border-radius','box-shadow',
     'opacity','z-index','overflow'];
   const DEFAULTS = new Set(['none','normal','auto','0px','0px 0px','rgba(0, 0, 0, 0)','static','visible','1','0px none rgb(0, 0, 0)']);
-  const ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path stroke-linejoin="round" d="M14.86 16.5l-2.46-2.46-.75.75c-.77.77-1.16 1.15-1.57 1.06-.41-.09-.6-.6-.98-1.62L7.85 10.83c-.75-2.04-1.13-3.06-.6-3.59.52-.52 1.54-.15 3.58.6l3.4 1.26c1.02.38 1.53.56 1.62.98.09.41-.29.8-1.06 1.57l-.75.75 2.46 2.46c.25.25.38.38.44.52.08.19.08.4 0 .59-.06.14-.19.27-.44.52s-.38.38-.52.44a.78.78 0 0 1-.59 0c-.14-.06-.27-.19-.52-.44z"/><path d="M2 12c0-4.71 0-7.07 1.46-8.54C4.93 2 7.29 2 12 2s7.07 0 8.54 1.46C22 4.93 22 7.29 22 12s0 7.07-1.46 8.54C19.07 22 16.71 22 12 22s-7.07 0-8.54-1.46C2 19.07 2 16.71 2 12z"/></svg>';
   let state = 'idle', nonce = 0, picks = [], taken = 0, target = null, frame = 0, theme = {};
   let host = null, ui = null, marks = new Map(), seq = 0, layer = null, markFrame = 0, resizes = null, mutations = null;
 
@@ -161,7 +160,7 @@
     const t = theme, on = contrast(t.accent || '#7c6cf2');
     return `:host{all:initial;--accent:${t.accent};--on-accent:${on};--surface:${t.surface};--border:${t.border};` +
       `--text:${t.text};--muted:${t.muted};--faint:${t.faint};--chip:${t.chip};` +
-      `--shadow:${t.dark ? '0 8px 24px rgba(0,0,0,.45),0 1px 2px rgba(0,0,0,.3)' : '0 8px 24px rgba(15,20,30,.16),0 1px 2px rgba(15,20,30,.12)'};` +
+      `--shadow:${t.dark ? '0 6px 20px rgba(0,0,0,.4),0 1px 2px rgba(0,0,0,.3)' : '0 6px 20px rgba(15,20,30,.12),0 1px 2px rgba(15,20,30,.1)'};` +
       `--font:${JSON.stringify(t.font || 'system-ui')},system-ui,-apple-system,"Segoe UI",sans-serif}` +
       `*{box-sizing:border-box}`;
   };
@@ -171,10 +170,16 @@
     const [r, g, b] = [n >> 16, (n >> 8) & 255, n & 255].map((c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
     return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4 ? '#0b0d12' : '#ffffff';
   };
-  const radius = (el) => {
-    const r = parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0;
-    return Math.min(r, 16) + 'px';
+  // Outlines sit just outside the element (a gap, then the 1.5px line), so
+  // they never draw over its own border, and round like it does.
+  const BORDER = 1.5, GAP = 2, OUT = BORDER + GAP, FLAG = 20, TAB = 18;
+  const ring = (el, r) => {
+    const own = Math.min(parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0, r.width / 2, r.height / 2);
+    return { left: r.left - OUT, top: r.top - OUT, width: r.width + OUT * 2, height: r.height + OUT * 2, radius: Math.min(own + OUT, 18) || 4 };
   };
+  const place = (node, box) => Object.assign(node.style, {
+    left: box.left + 'px', top: box.top + 'px', width: box.width + 'px', height: box.height + 'px', borderRadius: box.radius + 'px',
+  });
   const shadowHost = (tag, z, css) => {
     const node = document.createElement(tag);
     node.style.cssText = `position:fixed;inset:0;z-index:${z};pointer-events:none;`;
@@ -183,41 +188,47 @@
     document.documentElement.appendChild(node);
     return [node, root];
   };
-  const BADGE = '.badge{position:fixed;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--on-accent);' +
-    'font:600 11px/18px var(--font);text-align:center;font-variant-numeric:tabular-nums;box-shadow:0 0 0 2px var(--surface),var(--shadow)}';
+  // The accent flag: the hover label and a small element's number. It grows
+  // out of the outline's top edge (or hangs inside it near the viewport top).
+  const FLAG_CSS = `.flag{position:fixed;display:none;align-items:center;height:${FLAG}px;padding:0 7px;border-radius:5px 5px 0 0;
+      background:var(--accent);color:var(--on-accent);font:500 11px/1 var(--font);white-space:nowrap;overflow:hidden;max-width:min(70vw,440px)}
+    .flag.inside{border-radius:0 0 5px 5px}
+    .flag b,.flag .n{font-weight:650}
+    .flag .n,.flag .dim{font-variant-numeric:tabular-nums;flex:none}
+    .flag .cls{opacity:.72;overflow:hidden;text-overflow:ellipsis}
+    .flag .n{margin-right:6px}
+    .flag .dim{opacity:.6;margin-left:6px}`;
+  const flagAt = (flag, box, height) => {
+    const left = Math.max(4, Math.min(box.left + Math.max(box.radius, 6), innerWidth - flag.offsetWidth - 4));
+    const above = box.top - height + BORDER;
+    const inside = above < 2;
+    flag.classList.toggle('inside', inside);
+    flag.style.left = left + 'px';
+    flag.style.top = (inside ? Math.max(box.top, 0) : above) + 'px';
+  };
 
   const mount = () => {
     let root;
     [host, root] = shadowHost('zeron-annotator', 2147483647, `
-      .box{position:fixed;border:1.5px solid var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);display:none;
-        transition:left 70ms ease-out,top 70ms ease-out,width 70ms ease-out,height 70ms ease-out,border-radius 70ms ease-out}
-      .tag{position:fixed;display:none;align-items:center;gap:6px;height:24px;padding:0 8px 0 4px;border-radius:7px;background:var(--surface);
-        border:1px solid var(--border);box-shadow:var(--shadow);font:500 12px/1 var(--font);white-space:nowrap;max-width:min(60vw,420px);overflow:hidden}
-      .tag .well{display:grid;place-items:center;width:18px;height:18px;border-radius:5px;background:var(--chip);color:var(--muted);flex:none}
-      .tag .well svg{width:12px;height:12px}
-      .tag .well.n{background:var(--accent);color:var(--on-accent);font:600 11px/1 var(--font);width:auto;min-width:18px;padding:0 4px}
-      .tag .name{display:flex;min-width:0;overflow:hidden}
-      .tag b{color:var(--text);font-weight:600;flex:none}
-      .tag .cls{color:var(--muted);overflow:hidden;text-overflow:ellipsis}
-      .tag .dim{color:var(--faint);font-variant-numeric:tabular-nums;flex:none}
-      .hint{position:fixed;left:50%;bottom:16px;display:flex;align-items:center;gap:10px;height:34px;padding:0 12px 0 8px;border-radius:12px;
-        background:color-mix(in srgb,var(--surface) 96%,transparent);-webkit-backdrop-filter:blur(18px) saturate(1.4);backdrop-filter:blur(18px) saturate(1.4);
-        border:1px solid var(--border);box-shadow:var(--shadow);font:500 12.5px/1 var(--font);color:var(--text);white-space:nowrap;
-        transform:translate(-50%,0);opacity:1;transition:opacity 140ms ease-out,transform 140ms ease-out,top 140ms ease-out,bottom 140ms ease-out}
-      .hint.enter{opacity:0;transform:translate(-50%,6px)}
-      .hint.top{bottom:auto;top:16px}
-      .hint .icon{display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
-      .hint .icon svg{width:14px;height:14px}
-      .hint .sep{width:1px;height:14px;background:var(--border)}
-      .hint .keys{display:flex;align-items:center;gap:6px;color:var(--muted);font-weight:400}
-      .hint kbd{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:5px;background:var(--chip);
-        color:var(--text);font:500 11px/1 var(--font)}
+      .box{position:fixed;display:none;border:${BORDER}px solid var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent);
+        transition:left 80ms ease-out,top 80ms ease-out,width 80ms ease-out,height 80ms ease-out,border-radius 80ms ease-out}
+      ${FLAG_CSS}
+      .hint{position:fixed;left:50%;bottom:14px;display:flex;align-items:center;gap:10px;height:32px;padding:0 6px 0 11px;border-radius:10px;
+        background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow);font:500 12px/1 var(--font);color:var(--text);white-space:nowrap;
+        transform:translate(-50%,0);transition:opacity 140ms ease-out,transform 140ms ease-out}
+      .hint.enter{opacity:0;transform:translate(-50%,4px)}
+      .hint.top{bottom:auto;top:14px}
+      .hint .dot{width:6px;height:6px;border-radius:3px;background:var(--accent);flex:none}
+      .hint .keys{display:flex;align-items:center;gap:5px;color:var(--muted);font-weight:400}
+      .hint .keys kbd+span+kbd{margin-left:6px}
+      .hint kbd{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 5px;border-radius:5px;
+        background:var(--chip);color:var(--text);font:500 11px/1 var(--font)}
       @media (prefers-reduced-motion:reduce){.box,.hint{transition:none}}
     `);
-    root.innerHTML += `<div class="box"></div><div class="tag"></div>
-      <div class="hint enter"><span class="icon">${ICON}</span><span class="title">Click an element to annotate</span><span class="sep"></span>
-      <span class="keys"><kbd>⇧</kbd>Add more<kbd>Esc</kbd>Done</span></div>`;
-    ui = { box: root.querySelector('.box'), tag: root.querySelector('.tag'), hint: root.querySelector('.hint'), title: root.querySelector('.title') };
+    root.innerHTML += `<div class="box"></div><div class="flag"></div>
+      <div class="hint enter"><span class="dot"></span><span class="title">Select an element</span>
+      <span class="keys"><kbd>⇧</kbd><span>Add more</span><kbd>Esc</kbd><span>Done</span></span></div>`;
+    ui = { box: root.querySelector('.box'), flag: root.querySelector('.flag'), hint: root.querySelector('.hint'), title: root.querySelector('.title') };
     requestAnimationFrame(() => ui && ui.hint.classList.remove('enter'));
     const cursor = document.createElement('style');
     cursor.id = 'zeron-annotator-cursor';
@@ -228,26 +239,24 @@
   const label = (el, r) => {
     const n = markOf(el);
     const name = el.tagName.toLowerCase();
-    const rest = describe(el).slice(name.length);
-    const well = n ? `<span class="well n">${n}</span>` : `<span class="well">${ICON}</span>`;
-    ui.tag.innerHTML = `${well}<span class="name"><b></b><span class="cls"></span></span><span class="dim"></span>`;
-    ui.tag.querySelector('b').textContent = name;
-    ui.tag.querySelector('.cls').textContent = rest;
-    ui.tag.querySelector('.dim').textContent = `${Math.round(r.width)} × ${Math.round(r.height)}`;
+    ui.flag.innerHTML = `${n ? '<span class="n"></span>' : ''}<b></b><span class="cls"></span><span class="dim"></span>`;
+    if (n) ui.flag.querySelector('.n').textContent = String(n);
+    ui.flag.querySelector('b').textContent = name;
+    ui.flag.querySelector('.cls').textContent = describe(el).slice(name.length);
+    ui.flag.querySelector('.dim').textContent = `${Math.round(r.width)} × ${Math.round(r.height)}`;
   };
   const paint = () => {
     frame = 0;
     if (!target || !ui) return;
     const r = target.getBoundingClientRect();
-    Object.assign(ui.box.style, { display: 'block', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px', borderRadius: radius(target) });
+    const box = ring(target, r);
+    place(ui.box, box);
+    ui.box.style.display = 'block';
     label(target, r);
-    ui.tag.style.display = 'flex';
-    const h = 24, gap = 6;
-    const above = r.top - h - gap;
-    ui.tag.style.left = Math.max(6, Math.min(r.left, innerWidth - ui.tag.offsetWidth - 6)) + 'px';
-    ui.tag.style.top = (above >= 6 ? above : Math.min(r.bottom + gap, innerHeight - h - 6)) + 'px';
+    ui.flag.style.display = 'flex';
+    flagAt(ui.flag, box, FLAG);
     // Keep the hint off the element being pointed at.
-    ui.hint.classList.toggle('top', r.bottom > innerHeight - 64 && r.top > 64);
+    ui.hint.classList.toggle('top', r.bottom > innerHeight - 60 && r.top > 60);
   };
   const schedule = () => { if (!frame) frame = requestAnimationFrame(paint); };
   const at = (x, y) => {
@@ -255,21 +264,31 @@
     return el && el !== host && el !== layer && el !== document.documentElement ? el : null;
   };
 
-  // Picked elements stay outlined with their number until their chip leaves
-  // the draft. Repaints run only when something moves (scroll, resize,
-  // layout or DOM changes), never on a timer.
+  // Picked elements keep their outline, numbered like their chip, until the
+  // chip leaves the draft. The number is a tab cut into the outline's corner;
+  // an element too small to hold one wears it as a flag on its top edge.
+  // Repaints run only when something moves, never on a timer.
   const paintMarks = () => {
     markFrame = 0;
     for (const mark of marks.values()) {
       const r = mark.el.isConnected ? mark.el.getBoundingClientRect() : null;
       const shown = r && r.width + r.height > 0 && r.bottom > 0 && r.top < innerHeight;
-      mark.box.style.display = mark.badge.style.display = shown ? 'block' : 'none';
-      if (!shown) continue;
-      Object.assign(mark.box.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
-      // The badge sits on the top-left corner but never leaves the viewport.
-      const bw = mark.badge.offsetWidth || 18;
-      mark.badge.style.left = Math.max(4, Math.min(r.left - 8, innerWidth - bw - 4)) + 'px';
-      mark.badge.style.top = Math.max(4, Math.min(r.top - 8, innerHeight - 22)) + 'px';
+      mark.box.style.display = shown ? 'block' : 'none';
+      if (!shown) { mark.flag.style.display = 'none'; continue; }
+      const box = ring(mark.el, r);
+      place(mark.box, box);
+      mark.small = box.width < 44 || box.height < 34;
+      mark.tab.style.display = mark.small ? 'none' : 'flex';
+      mark.flag.style.display = mark.small ? 'flex' : 'none';
+      if (mark.small) {
+        flagAt(mark.flag, box, TAB);
+      } else {
+        mark.tab.style.borderRadius = `${Math.min(box.radius, TAB)}px 0 6px 0`;
+        mark.tab.style.paddingLeft = Math.max(6, box.radius * 0.45) + 'px';
+        // An outline cut off by the viewport's top keeps its number in view.
+        const hidden = Math.max(0, -box.top);
+        mark.tab.style.transform = hidden ? `translateY(${Math.min(hidden, box.height - TAB)}px)` : '';
+      }
     }
   };
   const scheduleMarks = () => { if (!markFrame) markFrame = requestAnimationFrame(paintMarks); };
@@ -277,15 +296,19 @@
     if (on && !layer) {
       let root;
       [layer, root] = shadowHost('zeron-annotations', 2147483646, `
-        .mark{position:fixed;border:1.5px solid var(--accent);background:color-mix(in srgb,var(--accent) 6%,transparent);display:none}
-        ${BADGE}
-        .badge:empty{visibility:hidden}
-        .mark.new{animation:settle 260ms ease-out}
-        .badge.new{animation:pop 260ms cubic-bezier(.2,1.4,.4,1)}
-        .mark.focus{background:color-mix(in srgb,var(--accent) 16%,transparent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 30%,transparent)}
-        @keyframes settle{from{background:color-mix(in srgb,var(--accent) 28%,transparent)}}
-        @keyframes pop{from{transform:scale(.4);opacity:0}}
-        @media (prefers-reduced-motion:reduce){.mark.new,.badge.new{animation:none}}
+        .mark{position:fixed;display:none;border:${BORDER}px solid var(--accent);background:color-mix(in srgb,var(--accent) 4%,transparent);
+          transition:background-color 120ms ease-out}
+        .mark.focus{background:color-mix(in srgb,var(--accent) 16%,transparent)}
+        .tab{position:absolute;left:-${BORDER}px;top:-${BORDER}px;display:flex;align-items:center;justify-content:center;
+          min-width:24px;height:${TAB}px;padding:0 7px 0 6px;background:var(--accent);color:var(--on-accent);
+          font:650 11px/1 var(--font);font-variant-numeric:tabular-nums}
+        .tab:empty{visibility:hidden}
+        ${FLAG_CSS}
+        .flag{height:${TAB}px;padding:0 6px;font-weight:650;font-variant-numeric:tabular-nums}
+        .flag:empty{visibility:hidden}
+        .mark.new{animation:settle 320ms ease-out}
+        @keyframes settle{from{background:color-mix(in srgb,var(--accent) 26%,transparent)}}
+        @media (prefers-reduced-motion:reduce){.mark,.mark.new{transition:none;animation:none}}
       `);
       layer.root = root;
       resizes = new ResizeObserver(scheduleMarks);
@@ -306,12 +329,14 @@
     watchMarks(true);
     const box = document.createElement('div');
     box.className = 'mark new';
-    box.style.borderRadius = radius(el);
-    const badge = document.createElement('div');
-    badge.className = 'badge';
-    layer.root.append(box, badge);
+    const tab = document.createElement('div');
+    tab.className = 'tab';
+    box.appendChild(tab);
+    const flag = document.createElement('div');
+    flag.className = 'flag';
+    layer.root.append(box, flag);
     resizes.observe(el);
-    marks.set(++seq, { el, box, badge, n: 0 });
+    marks.set(++seq, { el, box, tab, flag, small: false, n: 0 });
     scheduleMarks();
     return seq;
   };
@@ -325,7 +350,7 @@
     if (!el) return;
     picks.push({ ...capture(el), marker: mark(el) });
     if (!e.shiftKey) stop('done');
-    else if (ui) ui.title.textContent = `${picks.length + taken} added · Click the last one`;
+    else if (ui) ui.title.textContent = `${picks.length + taken} selected`;
   };
   const onKey = (e) => { if (e.isTrusted && e.key === 'Escape') { swallow(e); stop('cancelled'); } };
   const LISTEN = [['mousemove', onMove], ['click', onClick], ['mousedown', swallow], ['mouseup', swallow],
@@ -359,13 +384,12 @@
       const found = marks.get(id);
       if (!found) return;
       found.n = n;
-      found.badge.textContent = String(n);
-      found.badge.classList.add('new');
+      found.tab.textContent = found.flag.textContent = String(n);
       scheduleMarks();
     },
     keep(numbers) {
       for (const [id, found] of marks) {
-        if (!numbers.includes(found.n)) { resizes.unobserve(found.el); found.box.remove(); found.badge.remove(); marks.delete(id); }
+        if (!numbers.includes(found.n)) { resizes.unobserve(found.el); found.box.remove(); found.flag.remove(); marks.delete(id); }
       }
       if (!marks.size) watchMarks(false);
     },

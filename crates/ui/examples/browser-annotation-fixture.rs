@@ -68,7 +68,13 @@ fn main() -> anyhow::Result<()> {
     let site = format!("http://127.0.0.1:{}/", serve_site());
     let temp = tempfile::tempdir()?;
     let workspace = temp.path().join("workspace");
-    std::fs::create_dir_all(&workspace)?;
+    std::fs::create_dir_all(workspace.join("src"))?;
+    // Files to @-mention, so annotation chips sit beside file chips.
+    std::fs::write(
+        workspace.join("src/Pricing.tsx"),
+        "export function Pricing() {}\n",
+    )?;
+    std::fs::write(workspace.join("src/pricing.css"), ".plan-card {}\n")?;
     let runtime = tokio::runtime::Runtime::new()?;
     let core = runtime.block_on(async {
         zeron_engine::EngineCore::assemble(
