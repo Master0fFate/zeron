@@ -421,6 +421,52 @@ fn fx_install_paths() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+fn droid_install_paths() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = crate::executable::home_dir() {
+        dirs.push(home.join("bin").join("droid"));
+        dirs.push(home.join(".local").join("bin").join("droid"));
+    }
+    dirs.push(PathBuf::from("/opt/homebrew/bin/droid"));
+    dirs.push(PathBuf::from("/usr/local/bin/droid"));
+    dirs
+}
+
+fn droid_spec() -> AcpAgentSpec {
+    AcpAgentSpec {
+        id: HarnessId::Droid,
+        display_name: "Droid",
+        executable: "droid",
+        env_override: "DROID_EXECUTABLE",
+        args: &["exec", "--output-format", "acp"],
+        npm_package: None,
+        archive: None,
+        extra_paths: droid_install_paths,
+        cli_executable: "droid",
+        cli_extra_paths: droid_install_paths,
+        install_hint: "droid (searched PATH, the login shell's PATH, ~/bin, ~/.local/bin, \
+             /opt/homebrew/bin, /usr/local/bin, and fnm/nvm/volta/pnpm/bun install dirs; \
+             install with `curl -fsSL https://app.factory.ai/cli | sh`, \
+             `irm https://app.factory.ai/cli/windows | iex` on Windows, or \
+             `npm install -g droid`; set DROID_EXECUTABLE to override)",
+        models: Vec::new,
+        steering_mode: SteeringMode::TurnBoundary,
+        reasoning_levels: &[],
+        prompt_transform: identity_transform,
+        effort_values: default_effort_values,
+        ladder_extras: &[],
+        prompt_complete_extension: false,
+        prompt_stall: None,
+        stall_hint: "Run `droid` once to confirm it is signed in, or set FACTORY_API_KEY.",
+        effort_in_model_id: false,
+        auth_method: None,
+        skill_dirs: Vec::new,
+        hidden_commands: &[],
+        drops_unstarted_cancelled_prompt: false,
+        access_modes: &[AccessMode::Supervised, AccessMode::FullAccess],
+    }
+}
+
 fn hermes_install_paths() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = crate::executable::home_dir() {
@@ -1383,6 +1429,10 @@ impl AcpHarness {
     /// fx native ACP server.
     pub fn fx() -> Self {
         Self::with_spec(fx_spec())
+    }
+
+    pub fn droid() -> Self {
+        Self::with_spec(droid_spec())
     }
 
     /// Hermes Agent (`hermes acp`) — Nous Research's native ACP server.
