@@ -951,7 +951,7 @@ fn full_registry() -> HarnessRegistry {
             installed: true,
             can_install: false,
             enabled: None,
-            access_modes: vec![AccessMode::Supervised, AccessMode::FullAccess],
+            access_modes: AccessMode::ALL.to_vec(),
             supports_plan: false,
         },
         Box::new(|| zeron_harness::AcpHarness::droid().installed()),

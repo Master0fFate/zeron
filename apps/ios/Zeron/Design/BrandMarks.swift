@@ -30,7 +30,7 @@ enum BrandMark {
     /// asset says so or the mark's holes fill in solid.
     var evenOddFill: Bool {
         switch self {
-        case .hermes, .droid, .pi, .opencode, .antigravity: return true
+        case .hermes, .pi, .opencode, .antigravity: return true
         default: return false
         }
     }
