@@ -31,10 +31,7 @@ pub(crate) fn context(
             home.join(".fx/chatgpt-auth.json"),
             home.join(".fx/grok-auth.json"),
         ],
-        HarnessId::Droid => vec![
-            home.join(".factory/auth.v2.keyring"),
-            home.join(".factory/settings.json"),
-        ],
+        HarnessId::Droid => vec![home.join(".factory/settings.json")],
         HarnessId::Opencode => {
             let data = root("XDG_DATA_HOME", home.join(".local/share"));
             let config = root("XDG_CONFIG_HOME", home.join(".config"));
